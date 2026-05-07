@@ -13,12 +13,42 @@ const CHARACTERS = [
 ];
 
 const $ = (sel) => document.querySelector(sel);
-const socket = io();
+
+// Stabile Geräte-ID — überlebt Tab-Reload und Browser-Suspend.
+// Der Server nutzt sie, um beim Reconnect die alte Session zu räumen,
+// damit nicht der eigene Charakter als "taken" angezeigt wird.
+function ensureClientId() {
+  try {
+    let id = localStorage.getItem('maennertag-clientId');
+    if (!id) {
+      id = 'c-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
+      localStorage.setItem('maennertag-clientId', id);
+    }
+    return id;
+  } catch (_) {
+    return 'c-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now().toString(36);
+  }
+}
+const CLIENT_ID = ensureClientId();
+
+// Letzten Charakter merken, damit ein versehentlicher Reload den User direkt
+// wieder im Spiel landet — statt zwingend einen anderen wählen zu müssen.
+function loadSavedCharId() {
+  try { return sessionStorage.getItem('maennertag-charId') || null; }
+  catch (_) { return null; }
+}
+function saveCharId(id) {
+  try {
+    if (id) sessionStorage.setItem('maennertag-charId', id);
+    else sessionStorage.removeItem('maennertag-charId');
+  } catch (_) { /* ignore */ }
+}
+
+const socket = io({ auth: { clientId: CLIENT_ID } });
 
 let myCharacter = null;
 let takenChars = new Set();
 
-// Charakter-Auswahl direkt beim Laden bauen — kein Name-Step mehr.
 document.addEventListener('DOMContentLoaded', () => {
   buildCharacterGrid();
 });
@@ -53,6 +83,7 @@ socket.on('joined', ({ characterId }) => {
   const c = CHARACTERS.find(c => c.id === characterId);
   if (!c) return;
   myCharacter = c;
+  saveCharId(c.id);
   document.documentElement.style.setProperty('--char-color', c.color);
   $('#banner-name').textContent = c.name.toUpperCase();
   $('#banner-ability').textContent = c.ability;
@@ -136,7 +167,7 @@ function pickCharacter(c) {
 
 // ===== STEP 3: Controller (Touch) =====
 const inputState = {
-  left: false, right: false, up: false, down: false,
+  left: false, right: false, up: false,
   action: false, drink: false
 };
 let lastSentJSON = '';
@@ -185,11 +216,16 @@ document.querySelectorAll('[data-input]').forEach(btn => {
   });
 });
 
-// Reconnection-Sicherheit: Bei Reconnect nochmal beitreten
+// Reconnect/Reload-Recovery:
+// Wenn wir noch einen Charakter aus dieser Session kennen (Memory ODER
+// sessionStorage nach Reload), automatisch wieder beitreten. Der Server
+// hat unsere alte Session über die clientId schon geräumt.
 socket.on('connect', () => {
-  if (myCharacter) {
-    socket.emit('join-game', { name: myCharacter.name.toUpperCase(), characterId: myCharacter.id });
-  }
+  const charId = (myCharacter && myCharacter.id) || loadSavedCharId();
+  if (!charId) return;
+  const c = CHARACTERS.find(x => x.id === charId);
+  if (!c) return;
+  socket.emit('join-game', { name: c.name.toUpperCase(), characterId: c.id });
 });
 
 socket.on('disconnect', () => {
@@ -200,7 +236,10 @@ socket.on('disconnect', () => {
 document.addEventListener('gesturestart', (e) => e.preventDefault());
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('touchmove', (e) => {
-  if (e.target.tagName !== 'INPUT') e.preventDefault();
+  if (e.target.tagName === 'INPUT') return;
+  // Charakter-Liste: natives vertikales Scrollen erlauben (Querformat / kurze Viewports)
+  if (e.target.closest && e.target.closest('#character-grid')) return;
+  if (e.cancelable) e.preventDefault();
 }, { passive: false });
 
 // Bildschirm wach halten (best effort)

@@ -24,6 +24,40 @@ const CHARACTERS = [
 const charById = (id) => CHARACTERS.find(c => c.id === id) || CHARACTERS[0];
 
 // ================================================================
+//  AUDIO (Web Audio API – kein Download, retro Beeps)
+// ================================================================
+const SFX = {
+  ctx: null,
+  ensure() {
+    if (!this.ctx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (Ctx) this.ctx = new Ctx();
+    }
+    return this.ctx;
+  },
+  beep({ freq = 440, dur = 0.12, type = 'square', vol = 0.15, slide = 0 } = {}) {
+    const ctx = this.ensure(); if (!ctx) return;
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), ctx.currentTime + dur);
+    g.gain.setValueAtTime(vol, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + dur);
+    o.connect(g).connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + dur);
+  },
+  pickup()  { this.beep({ freq: 880, dur: 0.10, slide: 200, type: 'triangle', vol: 0.18 }); },
+  drink()   { this.beep({ freq: 220, dur: 0.18, slide: -60,  type: 'sawtooth', vol: 0.20 }); },
+  jump()    { this.beep({ freq: 520, dur: 0.10, slide: 200, type: 'square',   vol: 0.10 }); },
+  hit()     { this.beep({ freq: 180, dur: 0.25, slide: -120, type: 'square',   vol: 0.30 }); },
+  splash()  { this.beep({ freq: 350, dur: 0.20, type: 'sine', vol: 0.18 }); this.beep({ freq: 240, dur: 0.30, type: 'sine', vol: 0.12 }); },
+  brewery() { [523, 659, 784].forEach((f, i) => setTimeout(() => this.beep({ freq: f, dur: 0.18, type: 'triangle', vol: 0.18 }), i * 90)); },
+  win()     { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.beep({ freq: f, dur: 0.22, type: 'triangle', vol: 0.22 }), i * 130)); },
+  gameOver(){ [392, 330, 262].forEach((f, i) => setTimeout(() => this.beep({ freq: f, dur: 0.35, type: 'sawtooth', vol: 0.22 }), i * 220)); },
+  ability() { this.beep({ freq: 660, dur: 0.18, slide: 400, type: 'square', vol: 0.15 }); }
+};
+
+// ================================================================
 //  NETZWERK / INPUT-BRIDGE
 // ================================================================
 const socket = io();
@@ -423,19 +457,9 @@ class HikeScene extends Phaser.Scene {
       }
     }
 
-    // --- Rolling-Stones: pro Brauerei-Plateau ein Spawner. Steine rollen
-    // den Hang runter und müssen übersprungen werden. ---
+    // --- Rolling-Stones: Gruppe sofort, Spawner-Timer erst nach Mission-Banner-Dismiss
     this.rollingStones = this.physics.add.group();
-    this.breweries.forEach(b => {
-      // Nur wenn die Brauerei auf einem echten Hügel steht
-      if (b.plateau && b.plateau.topY < GROUND_Y - 50) {
-        this.time.addEvent({
-          delay: 5000 + Math.random() * 2500,
-          loop: true,
-          callback: () => this.spawnRollingStone(b.plateau)
-        });
-      }
-    });
+    this._rollingSpawnersStarted = false;
 
     // --- Spieler erstellen ---
     this.players = new Map();
@@ -445,15 +469,22 @@ class HikeScene extends Phaser.Scene {
       spawnX += 60;
     }
 
-    // Mid-Game Joins
-    socket.on('player-joined', (p) => {
+    // Mid-Game Joins — Listener bei Scene-Wechsel entfernen (sonst doppelte Spawns)
+    this._onHikePlayerJoined = (p) => {
       if (!this.players.has(p.id)) {
         this.spawnPlayer(p.id, p, this.cameras.main.scrollX + 100);
       }
-    });
-    socket.on('player-left', (id) => {
+    };
+    this._onHikePlayerLeft = (id) => {
       const p = this.players.get(id);
       if (p) { p.destroy(); this.players.delete(id); }
+      this.buildHUD();
+    };
+    socket.on('player-joined', this._onHikePlayerJoined);
+    socket.on('player-left', this._onHikePlayerLeft);
+    this.events.once('shutdown', () => {
+      socket.off('player-joined', this._onHikePlayerJoined);
+      socket.off('player-left', this._onHikePlayerLeft);
     });
 
     // Welt + Kamera
@@ -524,10 +555,15 @@ class HikeScene extends Phaser.Scene {
     });
 
     const dismiss = () => {
+      // actionLatch setzen, damit Special nicht sofort nach Banner-Dismiss feuert
+      for (const p of this.players.values()) p.actionLatch = true;
       this.tweens.killTweensOf(t3);
       this.tweens.add({
         targets: [overlay, t1, t2, t3], alpha: 0, duration: 400,
-        onComplete: () => { overlay.destroy(); t1.destroy(); t2.destroy(); t3.destroy(); }
+        onComplete: () => {
+          overlay.destroy(); t1.destroy(); t2.destroy(); t3.destroy();
+          this.startRollingStoneSpawners();
+        }
       });
       socket.off('player-input', skipHandler);
     };
@@ -539,6 +575,22 @@ class HikeScene extends Phaser.Scene {
   handleResize(gameSize) {
     this.cameras.main.setSize(gameSize.width, gameSize.height);
     this.buildHUD();
+  }
+
+  /** Rolling-Stone-Spawner — erst nach Intro-Banner, damit niemand „blind“ getroffen wird */
+  startRollingStoneSpawners() {
+    if (this._rollingSpawnersStarted) return;
+    this._rollingSpawnersStarted = true;
+    const GROUND_Y = this.GROUND_Y;
+    this.breweries.forEach(b => {
+      if (b.plateau && b.plateau.topY < GROUND_Y - 50) {
+        this.time.addEvent({
+          delay: 5000 + Math.random() * 2500,
+          loop: true,
+          callback: () => this.spawnRollingStone(b.plateau)
+        });
+      }
+    });
   }
 
   spawnBeer(x, y) {
@@ -570,11 +622,16 @@ class HikeScene extends Phaser.Scene {
       player.hitObstacle();
     });
     if (this.rollingStones) {
-      this.physics.add.collider(player.sprite, this.rollingStones, (sp, stone) => {
-        player.hitObstacle();
-        // Rolling stone bouncet kurz weg, damit der Spieler durchatmen kann
-        stone.body.setVelocityX(stone.body.velocity.x * -0.4);
-      });
+      this.physics.add.collider(
+        player.sprite,
+        this.rollingStones,
+        (sp, stone) => {
+          player.hitObstacle();
+          // Rolling stone bouncet kurz weg, damit der Spieler durchatmen kann
+          stone.body.setVelocityX(stone.body.velocity.x * -0.4);
+        },
+        () => !player.knockedOut
+      );
     }
     this.players.set(id, player);
     this.buildHUD();
@@ -601,14 +658,7 @@ class HikeScene extends Phaser.Scene {
     this.rollingStones.add(stone);
 
     this.physics.add.collider(stone, this.ground);
-    this.players.forEach(p => {
-      this.physics.add.collider(p.sprite, stone, () => {
-        p.hitObstacle();
-        // Stein bouncet kurz weg, damit Spieler nicht festklemmt
-        stone.body.setVelocityX(-targetVX * 0.5);
-        stone.targetVX = 0;  // Stoppt das Re-Forcen
-      });
-    });
+    // Kollision Spieler↔Stein nur über die Gruppe in spawnPlayer() (kein Doppel-Collider)
 
     // Auto-Cleanup nach 14 s (sollte längst aus dem Bild gerollt sein)
     this.time.delayedCall(14000, () => stone.active && stone.destroy());
@@ -692,13 +742,18 @@ class HikeScene extends Phaser.Scene {
     if (this.players.size === 0) return;
     let cx = 0, cy = 0;
     let minX = Infinity, maxX = -Infinity;
+    let camCount = 0;
     for (const p of this.players.values()) {
       const input = playerInputs.get(p.id) || {};
       p.update(input, delta);
-      cx += p.sprite.x;
-      cy += p.sprite.y;
-      minX = Math.min(minX, p.sprite.x);
-      maxX = Math.max(maxX, p.sprite.x);
+      // K.O. + Wasser von Kamera-Berechnung ausnehmen (verhindert Deadlocks am Rand)
+      if (!p.knockedOut && !p.inWater) {
+        cx += p.sprite.x;
+        cy += p.sprite.y;
+        minX = Math.min(minX, p.sprite.x);
+        maxX = Math.max(maxX, p.sprite.x);
+        camCount++;
+      }
       // Sieg checken
       // atGoal-Flag pro Spieler setzen, sobald er die Flagge passiert
       if (!p.atGoal && p.sprite.x >= this.goalX && !p.knockedOut && !p.inWater) {
@@ -706,8 +761,21 @@ class HikeScene extends Phaser.Scene {
         p.popText('🏁 AM ZIEL!', '#6dbf47');
       }
     }
-    cx /= this.players.size;
-    cy /= this.players.size;
+    if (camCount === 0) {
+      cx = 0;
+      cy = 0;
+      minX = Infinity;
+      maxX = -Infinity;
+      for (const p of this.players.values()) {
+        cx += p.sprite.x;
+        cy += p.sprite.y;
+        minX = Math.min(minX, p.sprite.x);
+        maxX = Math.max(maxX, p.sprite.x);
+      }
+      camCount = this.players.size;
+    }
+    cx /= camCount;
+    cy /= camCount;
 
     // Fortschrittsbalken aktualisieren — Position des führenden Spielers
     if (this.progressFill) {
@@ -749,7 +817,8 @@ class HikeScene extends Phaser.Scene {
     //  - wenn Span ≤ Screen-Breite-Margin → zentriert auf Mittelpunkt
     //  - wenn jemand zu weit zurück ist → an Min-X kleben, sodass er sichtbar bleibt
     const margin = 100;
-    const span = maxX - minX;
+    let span = maxX - minX;
+    if (!Number.isFinite(span) || camCount === 0) span = 0;
     let targetX;
     if (span > W - 2 * margin) {
       // Crew zu weit auseinander — Camera am Min-X verankern
@@ -789,7 +858,7 @@ class HikeScene extends Phaser.Scene {
     const camRight = camLeft + this.scale.width;
     const edgeMargin = 60;
     for (const p of this.players.values()) {
-      if (p.frozen) continue;
+      if (p.frozen || p.knockedOut || p.inWater) continue;
       if (p.sprite.x < camLeft + edgeMargin) {
         p.sprite.x = camLeft + edgeMargin;
         if (p.sprite.body.velocity.x < 0) p.sprite.body.setVelocityX(0);
@@ -833,6 +902,7 @@ class HikeScene extends Phaser.Scene {
   }
 
   applyBreweryEffect(player, brewery) {
+    SFX.brewery();
     // Stamina komplett auffüllen, +3 Bier ins Inventar
     player.stamina = player.maxStamina;
     player.beerInventory += 3;
@@ -875,6 +945,7 @@ class HikeScene extends Phaser.Scene {
   triggerGameOver() {
     if (this.gameLost) return;
     this.gameLost = true;
+    SFX.gameOver();
     const W = this.scale.width, H = this.scale.height;
     const overlay = this.add.rectangle(W / 2, H / 2, W, H, 0x1a0204, 0.85)
       .setScrollFactor(0).setDepth(2000);
@@ -905,6 +976,7 @@ class HikeScene extends Phaser.Scene {
   triggerWin(winner) {
     if (this.gameWon) return;
     this.gameWon = true;
+    SFX.win();
     for (const p of this.players.values()) p.frozen = true;
 
     const W = this.scale.width, H = this.scale.height;
@@ -1052,6 +1124,7 @@ class HikePlayer {
       } else {
         body.setVelocityY(-650);
         this.stamina = Math.max(0, this.stamina - 8);
+        SFX.jump();
       }
     }
     if (!input.up) this.upLatch = false;
@@ -1073,10 +1146,16 @@ class HikePlayer {
       else if (this.abilityCooldown <= 0) {
         this.useAbility();
       } else {
-        // Cooldown läuft — kurzes Feedback, damit man weiß warum nichts passiert
+        // Cooldown läuft — präziseres Feedback
         if (!this._lastCDPop || this.scene.time.now - this._lastCDPop > 1200) {
           this._lastCDPop = this.scene.time.now;
-          this.popText('★ ' + Math.ceil(this.abilityCooldown) + 's', '#888888');
+          this.popText('NOCH ' + Math.ceil(this.abilityCooldown) + 's WARTEN', '#f4c842');
+          // HUD-Label kurz aufblinken, damit der Spieler die Quelle sieht
+          if (this.hudAbilityCooldown) {
+            this.scene.tweens.add({
+              targets: this.hudAbilityCooldown, scale: 1.5, yoyo: true, duration: 150
+            });
+          }
         }
       }
     } else if (!input.action) {
@@ -1169,6 +1248,7 @@ class HikePlayer {
   pickupBeer() {
     this.beerInventory++;
     this.popText('🍺 +1', '#f4c842');
+    SFX.pickup();
   }
 
   // Trinken-Knopf: zwei Modi.
@@ -1208,6 +1288,7 @@ class HikePlayer {
       targets: this.sprite, scaleY: 1.2, yoyo: true, duration: 150
     });
     this.popText('+' + Math.round(gain), '#f4c842');
+    SFX.drink();
   }
 
   popText(msg, color) {
@@ -1231,6 +1312,10 @@ class HikePlayer {
     this.knockedOut = true;
     this.koTimer = 0;
     this.sprite.body.setVelocityX(0);
+    // Hitbox auf "liegend" umstellen — Arcade rotiert Bodies nicht mit,
+    // daher schwebt der Sprite sonst über dem Boden.
+    this.sprite.body.setSize(70, 34);
+    this.sprite.body.setOffset(0, 58);
     this.scene.tweens.add({
       targets: this.sprite, rotation: Math.PI / 2, duration: 400, ease: 'Bounce.out'
     });
@@ -1244,6 +1329,7 @@ class HikePlayer {
 
   updateKnockedOut(dt) {
     this.koTimer += dt;
+    this.sprite.body.setVelocityX(0);
     if (this.label) {
       this.label.setPosition(this.sprite.x, this.sprite.y - 30);
       this.label.setText(this.charData.name + ' 💤');
@@ -1311,6 +1397,9 @@ class HikePlayer {
     if (this.inWater) this.exitWater();
     this.sprite.body.setAllowGravity(true);
     this.sprite.body.setVelocity(0, 0);
+    // Hitbox auf "stehend" zurücksetzen
+    this.sprite.body.setSize(34, 90);
+    this.sprite.body.setOffset(18, 18);
     this.scene.tweens.add({
       targets: this.sprite, rotation: 0, duration: 300
     });
@@ -1329,14 +1418,15 @@ class HikePlayer {
     this.sprite.body.setAllowGravity(false);
     this.popText('💦 INS WASSER!', '#3a7aa8');
     this.scene.cameras.main.flash(150, 60, 120, 200);
+    SFX.splash();
   }
 
   exitWater() {
     this.inWater = false;
     this.sprite.body.setAllowGravity(true);
-    // WICHTIG: Spieler aus dem Wasser-Y nach oben anheben, sonst steckt
-    // er im Boden-Collider fest (der ist von GROUND_Y bis GROUND_Y+80).
-    this.sprite.y = this.scene.GROUND_Y - 80;
+    // Auf lokale Terrain-Höhe setzen (Bäche können zwischen erhöhten Sektionen liegen)
+    const top = this.scene.topYAt ? this.scene.topYAt(this.sprite.x) : this.scene.GROUND_Y;
+    this.sprite.y = top - 80;
     this.sprite.body.setVelocityY(0);
     if (this.sprite.setRotation) this.sprite.setRotation(0);
   }
@@ -1402,6 +1492,7 @@ class HikePlayer {
   };
 
   useAbility() {
+    SFX.ability();
     const id = this.charData.id;
     const info = HikePlayer.ABILITY_INFO[id] || { name: 'SPECIAL', desc: '' };
     // Großer Banner über dem Spieler — Name + Beschreibung
@@ -1446,7 +1537,7 @@ class HikePlayer {
         this.abilityCooldown = 10;
         break;
 
-      case 'jan': // Angel — zieht Items im Umkreis an
+      case 'jan': // Angel — zieht Items im Umkreis an (Static-Bodies: Hitbox nach Tween syncen)
         this.scene.beers.children.iterate(beer => {
           if (!beer || !beer.active) return;
           const dx = beer.x - this.sprite.x;
@@ -1455,21 +1546,28 @@ class HikePlayer {
           if (dist < 350) {
             this.scene.tweens.add({
               targets: beer, x: this.sprite.x, y: this.sprite.y,
-              duration: 600, ease: 'Quad.in'
+              duration: 600, ease: 'Quad.in',
+              onUpdate: () => {
+                if (!beer.active) return;
+                if (beer.body && beer.body.updateFromGameObject) beer.body.updateFromGameObject();
+              },
+              onComplete: () => {
+                if (!beer.active) return;
+                if (beer.body && beer.body.updateFromGameObject) beer.body.updateFromGameObject();
+              }
             });
           }
         });
         this.abilityCooldown = 8;
         break;
 
-      case 'stefan': // Group-Speed-Buff
+      case 'stefan': // Group-Speed-Buff — multiplikativ, damit Sven-Sprint o.ä. nicht „eingefroren“ wird
         this.scene.players.forEach(p => {
           if (!p._speedBuffActive) {
             p._speedBuffActive = true;
-            const orig = p.currentSpeed;
-            p.currentSpeed = orig * 1.2;
+            p.currentSpeed *= 1.2;
             this.scene.time.delayedCall(4000, () => {
-              p.currentSpeed = orig;
+              p.currentSpeed /= 1.2;
               p._speedBuffActive = false;
             });
           }
@@ -1522,6 +1620,7 @@ class HikePlayer {
     if (this.knockedOut) return;
     if (this.invulnTimer > 0) return;
     this.invulnTimer = 1.5;
+    SFX.hit();
     this.becomeKnockedOut('stone');
   }
 
@@ -1686,6 +1785,8 @@ class PaddleScene extends Phaser.Scene {
     // → Boote starten oben in unserer Welt, Ziel ist unten am Bildschirm: deshalb invertieren wir
     // einfach den Spawn — see below)
     const goalY = -RIVER_LENGTH + 200;
+    this.goalY = goalY;
+    this.gameWon = false;
     this.add.rectangle(W / 2, goalY, W - 2 * SHORE_W, 8, 0xc94f4f);
     this.add.text(W / 2, goalY - 30, 'ZIEL — BIERGARTEN', {
       fontFamily: 'Bungee, sans-serif', fontSize: '22px',
@@ -1701,13 +1802,23 @@ class PaddleScene extends Phaser.Scene {
       if (spawnX > W * 0.7) spawnX = W * 0.3;
     }
 
-    // Mid-Game Joins
-    socket.on('player-joined', (p) => {
-      if (!this.players.has(p.id)) this.spawnPaddler(p.id, p, W * 0.5, this.cameras.main.scrollY);
-    });
-    socket.on('player-left', (id) => {
+    // Mid-Game Joins — Listener bei Scene-Wechsel entfernen
+    this._onPaddlePlayerJoined = (p) => {
+      if (!this.players.has(p.id)) {
+        const H = this.scale.height;
+        this.spawnPaddler(p.id, p, W * 0.5, this.cameras.main.scrollY + H * 0.55);
+      }
+    };
+    this._onPaddlePlayerLeft = (id) => {
       const p = this.players.get(id);
       if (p) { p.destroy(); this.players.delete(id); }
+      this.buildHUD();
+    };
+    socket.on('player-joined', this._onPaddlePlayerJoined);
+    socket.on('player-left', this._onPaddlePlayerLeft);
+    this.events.once('shutdown', () => {
+      socket.off('player-joined', this._onPaddlePlayerJoined);
+      socket.off('player-left', this._onPaddlePlayerLeft);
     });
 
     // HUD-Container für Stamina-Leisten
@@ -1771,6 +1882,7 @@ class PaddleScene extends Phaser.Scene {
 
   update(time, delta) {
     if (this.players.size === 0) return;
+    if (this.gameWon) return;
     const dt = delta / 1000;
 
     // Strömung — alle Boote kontinuierlich nach "oben" (negative y) bewegen
@@ -1779,8 +1891,26 @@ class PaddleScene extends Phaser.Scene {
       const input = playerInputs.get(p.id) || {};
       p.update(input, dt, this.currentSpeed);
       avgY += p.sprite.y;
+      // Ziel: stromaufwärts = y kleiner/gleich goalY (negativer)
+      if (!p.atGoal && p.sprite.y <= this.goalY) {
+        p.atGoal = true;
+        const txt = this.add.text(p.sprite.x, p.sprite.y - 50, '🏁 AM ZIEL!', {
+          fontFamily: 'Bungee, sans-serif', fontSize: '18px', color: '#6dbf47',
+          stroke: '#000', strokeThickness: 3
+        }).setOrigin(0.5);
+        this.tweens.add({
+          targets: txt, y: txt.y - 40, alpha: 0, duration: 1200,
+          onComplete: () => txt.destroy()
+        });
+      }
     }
     avgY /= this.players.size;
+
+    // Sieg: alle Boote haben die Ziel-Linie passiert
+    if (this.players.size > 0) {
+      const all = Array.from(this.players.values());
+      if (all.every(p => p.atGoal)) this.triggerPaddleWin();
+    }
 
     // Kamera folgt Schwerpunkt vertikal, lateral bleibt fix
     const H = this.scale.height;
@@ -1792,6 +1922,41 @@ class PaddleScene extends Phaser.Scene {
     for (const p of this.players.values()) {
       if (p.sprite.y > camBottom - 40) p.sprite.y = camBottom - 60;
     }
+  }
+
+  triggerPaddleWin() {
+    if (this.gameWon) return;
+    this.gameWon = true;
+    SFX.win();
+    for (const p of this.players.values()) p.frozen = true;
+
+    const W = this.scale.width, H = this.scale.height;
+    const overlay = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.65)
+      .setScrollFactor(0).setDepth(2000);
+    this.add.text(W / 2, H * 0.35, '🛶  GESCHAFFT!', {
+      fontFamily: 'Bungee, sans-serif', fontSize: '56px', color: '#f4c842',
+      stroke: '#3d1a06', strokeThickness: 8
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+    this.add.text(W / 2, H * 0.5,
+      'Alle im Biergarten angekommen — Prost!', {
+      fontFamily: 'Special Elite, monospace', fontSize: '22px',
+      color: '#fef3d4', stroke: '#000', strokeThickness: 3
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+    const back = this.add.text(W / 2, H * 0.7, '↩  ZURÜCK ZUR LEVEL-AUSWAHL', {
+      fontFamily: 'Bungee, sans-serif', fontSize: '22px', color: '#1a0f08',
+      backgroundColor: '#f4c842', padding: { x: 24, y: 12 }
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2001)
+      .setInteractive({ useHandCursor: true });
+    back.on('pointerdown', () => this.scene.start('LevelSelectScene'));
+
+    const onInput = ({ input }) => {
+      if (input && input.action) {
+        socket.off('player-input', onInput);
+        this.scene.start('LevelSelectScene');
+      }
+    };
+    socket.on('player-input', onInput);
+    this.events.once('shutdown', () => socket.off('player-input', onInput));
   }
 }
 
@@ -1835,6 +2000,8 @@ class PaddlePlayer {
     this.boostTimer = 0;
     this.actionLatch = false;
     this.upLatch = false;
+    this.atGoal = false;
+    this.frozen = false;
 
     this.label = scene.add.text(x, y - 40, this.playerName, {
       fontFamily: 'Bungee, sans-serif', fontSize: '12px',
@@ -1844,6 +2011,10 @@ class PaddlePlayer {
 
   update(input, dt, currentSpeed) {
     const body = this.sprite.body;
+    if (this.frozen) {
+      body.setVelocity(0, 0);
+      return;
+    }
 
     // Lateral
     let vx = 0;
@@ -1905,6 +2076,7 @@ class PaddlePlayer {
   }
 
   useAbility() {
+    SFX.ability();
     // Im Paddel-Level vereinfacht: Jan hat Angel (Auto-Pull), alle anderen
     // bekommen einen kurzen Speed-Boost
     if (this.charData.id === 'jan') {
@@ -1915,7 +2087,15 @@ class PaddlePlayer {
         if (dx * dx + dy * dy < 350 * 350) {
           this.scene.tweens.add({
             targets: beer, x: this.sprite.x, y: this.sprite.y,
-            duration: 500, ease: 'Quad.in'
+            duration: 500, ease: 'Quad.in',
+            onUpdate: () => {
+              if (!beer.active) return;
+              if (beer.body && beer.body.updateFromGameObject) beer.body.updateFromGameObject();
+            },
+            onComplete: () => {
+              if (!beer.active) return;
+              if (beer.body && beer.body.updateFromGameObject) beer.body.updateFromGameObject();
+            }
           });
         }
       });
@@ -1929,6 +2109,7 @@ class PaddlePlayer {
   hitObstacle() {
     if (this.invulnTimer > 0) return;
     this.invulnTimer = 1.0;
+    SFX.hit();
     this.stamina = Math.max(0, this.stamina - 12);
     this.scene.cameras.main.shake(150, 0.004);
     this.scene.tweens.add({

@@ -1,0 +1,14 @@
+---
+description: Phaser 3 — Skill vor jeder Game-Client-Arbeit lesen (immer)
+alwaysApply: true
+---
+
+# Phaser-Skill in diesem Repo
+
+Der Client ist ein **Phaser-3**-Spiel. Sobald du an **Gameplay, Szenen, Physik (Arcade/Matter), Kollisionen, Input, Sprites, Tweens, Tilemaps oder Asset-Loading** arbeitest — insbesondere unter `public/` — **lies immer zuerst** (mit dem Read-Tool, vollständig) die Projekt-Skill-Datei:
+
+**[.claude/skills/phaser-gamedev/SKILL.md](.claude/skills/phaser-gamedev/SKILL.md)**
+
+- **Immer** heißt: bei jedem relevanten Task in dieser Codebase, nicht nur bei „großen“ Änderungen — auch bei kleinen Bugfixes in `public/js/game.js` oder ähnlichen Dateien.
+- Orientiere dich an den dortigen Mustern statt nur aus Gedächtnis zu raten.
+- Ausnahme: reine Änderungen ohne Phaser-Bezug (z. B. nur `server.js`, nur README, nur Deployment) — dann entfällt das Lesen.
