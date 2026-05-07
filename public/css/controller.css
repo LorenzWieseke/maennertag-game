@@ -1,0 +1,381 @@
+/* Männertag Controller — Bavarian Beer Festival Brutalism
+   Dominante Farben: Bier-Gold, gebranntes Holz, Hopfen-Grün.
+   Dicke Schatten, monospace body, blockig.
+*/
+
+:root {
+  --beer:        #f4c842;
+  --beer-deep:   #d99a1f;
+  --foam:        #fef3d4;
+  --wood:        #6b2e0c;
+  --wood-deep:   #3d1a06;
+  --hops:        #6dbf47;
+  --bg:          #1a0f08;
+  --ink:         #1a0f08;
+  --danger:      #c94f4f;
+
+  --char-color: var(--beer);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  /* Fallback für ältere iOS — svh nimmt die kleinste Viewport-Höhe (mit Adressleiste),
+     dvh die dynamische — wir kombinieren um sicherzugehen, dass nichts abgeschnitten wird */
+  min-height: 100svh;
+  overflow: hidden;
+  font-family: 'Special Elite', monospace;
+  background: var(--bg);
+  color: var(--foam);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  overscroll-behavior: none;
+  position: fixed;
+  inset: 0;
+}
+
+body {
+  background-image:
+    radial-gradient(circle at 20% 10%, rgba(244, 200, 66, 0.15), transparent 45%),
+    radial-gradient(circle at 80% 90%, rgba(109, 191, 71, 0.10), transparent 45%),
+    repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.04) 0 2px, transparent 2px 4px);
+}
+
+/* === STEP CONTAINER === */
+.step {
+  display: none;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+  padding:
+    calc(env(safe-area-inset-top) + 1rem)
+    1.25rem
+    calc(env(safe-area-inset-bottom) + 1rem);
+}
+.step.active { display: flex; }
+
+/* === VOLLBILD-BUTTON ===
+   Schwebt oben rechts, blendet sich aus wenn man im Vollbild ist.
+   Wichtig, weil iOS Safari sonst die Adresszeile einblendet und das
+   D-Pad unten abgeschnitten wird. */
+#fs-btn {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 0.5rem);
+  right: calc(env(safe-area-inset-right) + 0.5rem);
+  z-index: 2000;
+  padding: 0.45rem 0.8rem;
+  font-family: 'Bungee', sans-serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  background: var(--beer);
+  color: var(--ink);
+  border: 3px solid var(--wood-deep);
+  cursor: pointer;
+  box-shadow: 3px 3px 0 var(--wood-deep);
+  transition: transform 0.05s, opacity 0.2s;
+}
+#fs-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--wood-deep);
+}
+body.is-fullscreen #fs-btn { display: none; }
+
+.step-header {
+  text-align: center;
+  padding: 1rem 0 1.5rem;
+}
+.step-header h1 {
+  font-family: 'Bungee', sans-serif;
+  font-size: clamp(2.2rem, 9vw, 3.4rem);
+  color: var(--beer);
+  letter-spacing: 0.04em;
+  line-height: 0.95;
+  text-shadow: 4px 4px 0 var(--wood), 7px 7px 0 var(--wood-deep);
+}
+.step-header p {
+  margin-top: 1rem;
+  font-size: 1.1rem;
+  color: var(--foam);
+  opacity: 0.75;
+  letter-spacing: 0.05em;
+}
+
+/* === STEP 1: NAME === */
+#name-input {
+  margin: 1.5rem 0 1rem;
+  padding: 1.2rem;
+  font-size: 1.4rem;
+  font-family: 'Bungee', sans-serif;
+  letter-spacing: 0.1em;
+  background: var(--foam);
+  color: var(--ink);
+  border: 4px solid var(--beer);
+  border-radius: 0;
+  text-align: center;
+  width: 100%;
+  text-transform: uppercase;
+}
+#name-input:focus {
+  outline: none;
+  border-color: var(--hops);
+  box-shadow: 6px 6px 0 var(--wood);
+}
+
+.primary-btn {
+  margin-top: auto;
+  padding: 1.4rem;
+  font-size: 1.3rem;
+  font-family: 'Bungee', sans-serif;
+  background: var(--beer);
+  color: var(--ink);
+  border: none;
+  border-bottom: 8px solid var(--wood);
+  letter-spacing: 0.15em;
+  cursor: pointer;
+  width: 100%;
+  transition: transform 0.08s, border-bottom-width 0.08s;
+}
+.primary-btn:active {
+  transform: translateY(4px);
+  border-bottom-width: 4px;
+}
+.primary-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* === STEP 2: CHARACTER GRID === */
+#character-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  flex: 1 1 0;
+  min-height: 0;        /* erlaubt Schrumpfen unter content-Höhe in Flex */
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  /* Body hat touch-action: none (gegen Pinch-Zoom in der Spiel-View);
+     hier explizit Scrollen erlauben, sonst lassen sich auf dem Handy
+     die unteren Charakter-Karten nicht erreichen */
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  padding-bottom: 1rem;
+}
+.char-card {
+  background: var(--wood-deep);
+  border: 3px solid var(--char-color);
+  padding: 0.85rem 0.5rem;
+  text-align: center;
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  transition: transform 0.08s, box-shadow 0.08s;
+  box-shadow: 4px 4px 0 var(--wood-deep);
+}
+.char-card:active {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 var(--wood-deep);
+}
+.char-card.taken {
+  opacity: 0.25;
+  pointer-events: none;
+  filter: grayscale(0.8);
+}
+.char-card.taken::after {
+  content: 'WEG';
+  position: absolute;
+  top: 0.5rem; right: 0.5rem;
+  font-family: 'Bungee', sans-serif;
+  font-size: 0.7rem;
+  color: var(--danger);
+  letter-spacing: 0.1em;
+}
+.char-avatar {
+  width: 56px;
+  height: auto;
+  display: block;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+.char-card h3 {
+  font-family: 'Bungee', sans-serif;
+  font-size: 1.05rem;
+  color: var(--beer);
+  letter-spacing: 0.05em;
+}
+.char-card .ability {
+  font-size: 0.7rem;
+  color: var(--foam);
+  opacity: 0.85;
+  line-height: 1.2;
+  font-family: 'Special Elite', monospace;
+}
+
+/* === STEP 3: CONTROLLER === */
+#char-banner {
+  padding: 0.6rem 1rem;
+  background: var(--char-color);
+  color: var(--ink);
+  border-bottom: 4px solid var(--wood-deep);
+  margin: -1rem -1.25rem 0.75rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0.75rem;
+}
+#char-banner > span { display: block; }
+#char-banner #banner-name,
+#char-banner #banner-ability { grid-column: 2; }
+.banner-avatar {
+  grid-column: 1; grid-row: 1 / span 2;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  height: 56px; width: auto;
+}
+#banner-name {
+  font-family: 'Bungee', sans-serif;
+  font-size: 1.3rem;
+  letter-spacing: 0.1em;
+}
+#banner-ability {
+  font-family: 'Special Elite', monospace;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+
+.controller-layout {
+  flex: 1 1 0;
+  min-height: 0;             /* WICHTIG: ohne min-height:0 expandiert flex item ungebremst → Buttons wandern aus dem Bild */
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: stretch;
+  gap: 1rem;
+  padding: 0.5rem 0;
+  overflow: hidden;
+}
+
+/* --- D-Pad (links): nur LINKS und RECHTS, große Daumen-Buttons --- */
+.left-pad {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  height: 100%;
+  min-height: 0;
+}
+.dpad-btn {
+  font-size: 3rem;
+  background: var(--wood);
+  color: var(--beer);
+  border: 4px solid var(--wood-deep);
+  border-radius: 18px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.05s, background 0.05s;
+}
+.dpad-btn.pressed {
+  background: var(--beer);
+  color: var(--wood);
+  transform: scale(0.94);
+  box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.3);
+}
+
+/* --- Rechte Action-Buttons: Sprung (groß) + Trinken + Special --- */
+.right-pad {
+  display: grid;
+  grid-template-areas:
+    "jump jump"
+    "drink special";
+  grid-template-rows: 1.4fr 1fr;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  height: 100%;
+  min-height: 0;
+}
+.action-btn {
+  font-family: 'Bungee', sans-serif;
+  border-radius: 22px;
+  border: 5px solid var(--wood-deep);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  transition: transform 0.05s, filter 0.05s;
+  font-size: 2rem;
+}
+.action-btn small {
+  font-size: 0.7rem;
+  letter-spacing: 0.15em;
+  margin-top: 0.2rem;
+  opacity: 0.85;
+}
+.action-btn.jump {
+  grid-area: jump;
+  background: #6db2f4;
+  color: var(--wood);
+  box-shadow: 0 6px 0 #3a7ac4, 0 8px 0 var(--wood-deep);
+  font-size: 2.6rem;
+}
+.action-btn.drink {
+  grid-area: drink;
+  background: var(--beer);
+  color: var(--wood);
+  box-shadow: 0 6px 0 var(--beer-deep), 0 8px 0 var(--wood-deep);
+}
+.action-btn.special {
+  grid-area: special;
+  background: var(--hops);
+  color: var(--wood);
+  box-shadow: 0 6px 0 #4a8a3a, 0 8px 0 var(--wood-deep);
+}
+.action-btn.pressed {
+  transform: translateY(4px);
+  filter: brightness(1.15);
+}
+.action-btn.jump.pressed    { box-shadow: 0 2px 0 #3a7ac4, 0 4px 0 var(--wood-deep); }
+.action-btn.drink.pressed   { box-shadow: 0 2px 0 var(--beer-deep), 0 4px 0 var(--wood-deep); }
+.action-btn.special.pressed { box-shadow: 0 2px 0 #4a8a3a, 0 4px 0 var(--wood-deep); }
+
+/* === Toast === */
+.toast {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 1rem);
+  left: 50%;
+  transform: translateX(-50%) translateY(-150%);
+  background: var(--danger);
+  color: var(--foam);
+  padding: 0.75rem 1.5rem;
+  font-family: 'Bungee', sans-serif;
+  letter-spacing: 0.1em;
+  font-size: 0.9rem;
+  border: 3px solid var(--wood-deep);
+  z-index: 1000;
+  transition: transform 0.3s ease-out;
+}
+.toast.show { transform: translateX(-50%) translateY(0); }
+
+/* === Landscape — kompaktere Header === */
+@media (orientation: landscape) and (max-height: 500px) {
+  .step-header { padding: 0.5rem 0; }
+  .step-header h1 { font-size: 1.8rem; text-shadow: 2px 2px 0 var(--wood); }
+  .step-header p { display: none; }
+  #char-banner { padding: 0.4rem; }
+  #banner-ability { font-size: 0.7rem; }
+}

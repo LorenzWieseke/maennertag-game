@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1a0f08">
+  <title>Männertag — Controller</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bungee&family=Special+Elite&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/controller.css">
+</head>
+<body>
+
+  <!-- VOLLBILD-BUTTON, sichtbar bevor man im Vollbild ist -->
+  <button id="fs-btn" type="button" aria-label="Vollbild">⛶ VOLLBILD</button>
+
+  <!-- STEP 1: CHARACTER (Name wird automatisch vom Charakter genommen) -->
+  <section id="step-character" class="step active">
+    <header class="step-header">
+      <h1>🍻<br>MÄNNERTAG</h1>
+      <p>Wähle deinen Charakter</p>
+    </header>
+    <div id="character-grid"></div>
+  </section>
+
+  <!-- STEP 3: CONTROLLER -->
+  <section id="step-controller" class="step">
+    <div id="char-banner">
+      <span id="banner-name">—</span>
+      <span id="banner-ability">—</span>
+    </div>
+    <div class="controller-layout">
+      <div class="left-pad">
+        <button class="dpad-btn dpad-left" data-input="left" aria-label="Links">◀</button>
+        <button class="dpad-btn dpad-right" data-input="right" aria-label="Rechts">▶</button>
+      </div>
+      <div class="right-pad">
+        <button class="action-btn jump" data-input="up" aria-label="Springen">
+          ▲<small>SPRUNG</small>
+        </button>
+        <button class="action-btn drink" data-input="drink" aria-label="Bier trinken">
+          🍺<small>TRINKEN</small>
+        </button>
+        <button class="action-btn special" data-input="action" aria-label="Spezialfähigkeit">
+          ★<small>SPECIAL</small>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ERROR / INFO TOAST -->
+  <div id="toast" class="toast"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="js/pixelchars.js"></script>
+  <script src="js/controller.js"></script>
+</body>
+</html>

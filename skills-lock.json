@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "skills": {
+    "phaser-gamedev": {
+      "source": "chongdashu/phaserjs-tinyswords",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": ".claude/skills/phaser-gamedev/SKILL.md",
+      "computedHash": "7c189dc3905cea3c83b593bdeaba32d134dd3e3da70e7b7663c1e1612def64bf"
+    }
+  }
+}

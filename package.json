@@ -1,0 +1,18 @@
+{
+  "name": "maennertag-game",
+  "version": "0.1.0",
+  "description": "Männertag Side-Scroller mit Smartphone-Controllern via QR-Code",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "qrcode": "^1.5.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
