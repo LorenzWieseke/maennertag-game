@@ -54,7 +54,13 @@ const SFX = {
   brewery() { [523, 659, 784].forEach((f, i) => setTimeout(() => this.beep({ freq: f, dur: 0.18, type: 'triangle', vol: 0.18 }), i * 90)); },
   win()     { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.beep({ freq: f, dur: 0.22, type: 'triangle', vol: 0.22 }), i * 130)); },
   gameOver(){ [392, 330, 262].forEach((f, i) => setTimeout(() => this.beep({ freq: f, dur: 0.35, type: 'sawtooth', vol: 0.22 }), i * 220)); },
-  ability() { this.beep({ freq: 660, dur: 0.18, slide: 400, type: 'square', vol: 0.15 }); }
+  ability() { this.beep({ freq: 660, dur: 0.18, slide: 400, type: 'square', vol: 0.15 }); },
+  // Zusammenstoß mit besoffenem Biergast (Hike): dumpfer „Uups“ + Glas-Ping
+  drunkBump() {
+    this.beep({ freq: 155, dur: 0.14, slide: -55, type: 'sine', vol: 0.22 });
+    setTimeout(() => this.beep({ freq: 520, dur: 0.07, slide: 80, type: 'triangle', vol: 0.12 }), 45);
+    setTimeout(() => this.beep({ freq: 190, dur: 0.09, slide: -35, type: 'sawtooth', vol: 0.10 }), 95);
+  }
 };
 
 // ================================================================
@@ -585,6 +591,19 @@ class HikeScene extends Phaser.Scene {
       g.destroy();
     }
 
+    // Power-up: Staminaschutz (Wanderstab-Symbol)
+    if (!this.textures.exists('powerup-stamina')) {
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      g.fillStyle(0xf4c842); g.fillCircle(16, 16, 15);
+      g.fillStyle(0xfff3a0); g.fillCircle(16, 16, 10);
+      g.fillStyle(0xe8a04e); g.fillCircle(16, 16, 5);
+      g.fillStyle(0x6b3520, 1);
+      g.fillRect(11, 8, 3, 17);
+      g.fillRect(8, 10, 9, 3);
+      g.generateTexture('powerup-stamina', 32, 32);
+      g.destroy();
+    }
+
     // --- Stein-Texturen ---
     // Kleiner Stein (drüberlaufen geht nicht, blockiert)
     if (!this.textures.exists('stone-small')) {
@@ -685,6 +704,40 @@ class HikeScene extends Phaser.Scene {
       g.destroy();
     }
 
+    // Baum-Blocker (Ende Wald-Sektion 2 — kooperativ umwerfen).
+    // RIESIG: 220×640 px. Trampolin-Apex liegt bei vy=-1180 / g=1400 nur
+    // ~500 px über der Plattform — der Baum überragt das, also unmöglich
+    // einfach drüberzuhüpfen. Origin per setOrigin(0.5, 1) am Fuß.
+    if (!this.textures.exists('tree-blocker')) {
+      const TW = 220, TH = 640;
+      const TRUNK_H = 200;
+      const CROWN_BOTTOM = TH - 20;     // unten leicht in den Stamm rein
+      const CROWN_TOP_Y = 0;            // ganz oben in der Textur
+      const g = this.make.graphics({ x: 0, y: 0, add: false });
+      // Stamm
+      g.fillStyle(0x3d1a06); g.fillRect(TW / 2 - 36, TH - TRUNK_H, 72, TRUNK_H);
+      g.fillStyle(0x5a3010); g.fillRect(TW / 2 - 28, TH - TRUNK_H, 56, TRUNK_H);
+      g.fillStyle(0x7a4a20); g.fillRect(TW / 2 - 12, TH - TRUNK_H, 12, TRUNK_H);
+      // Krone in 6 überlappenden Tannen-Etagen, von unten breit nach oben schmal
+      const tiers = 6;
+      const baseW = TW;
+      const tipW = 22;
+      for (let i = 0; i < tiers; i++) {
+        const t = i / (tiers - 1);
+        const w = baseW * (1 - t) + tipW * t;
+        const yBottom = CROWN_BOTTOM - t * (CROWN_BOTTOM - 80);
+        const yTop = yBottom - (CROWN_BOTTOM / tiers) - 80;
+        const colors = [0x1c321c, 0x223a22, 0x294a28, 0x325a30, 0x3a6a36, 0x457a3e];
+        g.fillStyle(colors[i]);
+        g.fillTriangle(TW / 2 - w / 2, yBottom, TW / 2, Math.max(yTop, CROWN_TOP_Y), TW / 2 + w / 2, yBottom);
+      }
+      // Schnee-Spitze
+      g.fillStyle(0xfef3d4);
+      g.fillTriangle(TW / 2 - 8, 22, TW / 2, 2, TW / 2 + 8, 22);
+      g.generateTexture('tree-blocker', TW, TH);
+      g.destroy();
+    }
+
     // Trampolin-Pilz (rote Kappe mit weißen Punkten + heller Stiel)
     if (!this.textures.exists('mushroom-trampoline')) {
       const g = this.make.graphics({ x: 0, y: 0, add: false });
@@ -747,31 +800,78 @@ class HikeScene extends Phaser.Scene {
       g.generateTexture('enemy-squirrel', 48, 42);
       g.destroy();
     }
-    // Patrouille — Uniform + Helm, ohne Symbole (40×50)
-    if (!this.textures.exists('enemy-patrol')) {
+    // Betrunkener Biergast — Tracht + Krug (~93 % Spielerhöhe: 64×102 vs 70×110)
+    if (!this.textures.exists('enemy-drunk')) {
       const g = this.make.graphics({ x: 0, y: 0, add: false });
-      // Stiefel
-      g.fillStyle(0x2a1a0a); g.fillRect(8, 44, 10, 6); g.fillRect(22, 44, 10, 6);
-      // Beine / Hose
-      g.fillStyle(0x3a3a48); g.fillRect(11, 32, 6, 14); g.fillRect(23, 32, 6, 14);
-      // Torso
-      g.fillStyle(0x5a5a68); g.fillRect(8, 22, 24, 14);
-      g.fillStyle(0x6a6a78); g.fillRect(10, 24, 20, 10);
-      // rote Armbinde (rechts, kein Symbol)
-      g.fillStyle(0xc02020); g.fillRect(26, 26, 5, 6);
-      // Kragen
-      g.fillStyle(0x3a3a48); g.fillRect(12, 20, 16, 4);
+      const skin = 0xe8c4a0;
+      const skinDark = 0xc9a080;
+      const hose = 0x4a6b2a;
+      const hoseLight = 0x5d8a38;
+      const hemd = 0xf2ebe0;
+      const hemdShadow = 0xd8d0c8;
+      // Schuhe
+      g.fillStyle(0x2a1a12);
+      g.fillEllipse(22, 98, 14, 8);
+      g.fillEllipse(42, 98, 14, 8);
+      // Waden / Socken
+      g.fillStyle(0x3a2a22);
+      g.fillRect(16, 84, 12, 16);
+      g.fillRect(36, 84, 12, 16);
+      // Lederhose
+      g.fillStyle(hose);
+      g.fillEllipse(32, 76, 30, 22);
+      g.fillStyle(hoseLight);
+      g.fillEllipse(32, 72, 22, 14);
+      // Hosenträger
+      g.fillStyle(0x5a4030);
+      g.fillRect(24, 48, 4, 28);
+      g.fillRect(36, 48, 4, 28);
+      // Bauch / Hemd
+      g.fillStyle(hemdShadow);
+      g.fillEllipse(32, 56, 26, 22);
+      g.fillStyle(hemd);
+      g.fillEllipse(32, 52, 24, 18);
+      // linker Arm (locker)
+      g.fillStyle(hemd);
+      g.fillEllipse(14, 58, 10, 18);
+      g.fillStyle(skin);
+      g.fillCircle(12, 66, 5);
+      // rechter Arm + Krug
+      g.fillStyle(hemd);
+      g.fillEllipse(48, 54, 10, 20);
+      g.fillStyle(skin);
+      g.fillCircle(52, 62, 5);
+      // Krug (Bier)
+      g.fillStyle(0xc4a04a);
+      g.fillRoundedRect(46, 48, 16, 20, 3);
+      g.fillStyle(0xf4e8a8);
+      g.fillRect(48, 52, 12, 10);
+      g.fillStyle(0xa08040);
+      g.fillRect(50, 44, 10, 5);
       // Kopf
-      g.fillStyle(0xe8c8a8); g.fillCircle(20, 14, 9);
-      // Schnurrbart
-      g.fillStyle(0x2a1a0a); g.fillRect(12, 15, 16, 2);
-      // Stahlhelm
-      g.fillStyle(0x4a4a52); g.fillEllipse(20, 8, 20, 10);
-      g.fillStyle(0x6a6a72); g.fillEllipse(20, 6, 16, 7);
-      g.fillStyle(0x3a3a42); g.fillRect(10, 8, 20, 3);
-      // Augen
-      g.fillStyle(0x1a1a1a); g.fillCircle(16, 13, 2); g.fillCircle(24, 13, 2);
-      g.generateTexture('enemy-patrol', 40, 50);
+      g.fillStyle(skin);
+      g.fillCircle(30, 28, 16);
+      g.fillStyle(skinDark);
+      g.fillEllipse(30, 34, 18, 10);
+      // gerötete Wangen
+      g.fillStyle(0xd06060, 0.85);
+      g.fillCircle(20, 30, 5);
+      g.fillCircle(38, 30, 5);
+      // Augen (halb zu)
+      g.fillStyle(0x1a1010);
+      g.fillEllipse(24, 26, 5, 2);
+      g.fillEllipse(34, 26, 5, 2);
+      // Grinsen / Besoffen (einfacher Bogen statt strokePath-Arc)
+      g.fillStyle(0x3a2518);
+      g.fillEllipse(30, 36, 10, 5);
+      g.fillStyle(0x1a1010);
+      g.fillEllipse(30, 35, 6, 3);
+      // Haare / Wirrwarr
+      g.fillStyle(0x4a3020);
+      g.fillEllipse(30, 14, 22, 12);
+      g.fillTriangle(18, 18, 10, 8, 22, 12);
+      g.fillTriangle(42, 18, 54, 6, 40, 12);
+      g.generateTexture('enemy-drunk', 64, 102);
       g.destroy();
     }
 
@@ -999,6 +1099,7 @@ class HikeScene extends Phaser.Scene {
     // Pro Plattform: 3 Biere am Boden, plus 18 Sprung-Belohnungen in der Luft.
     // Mehr Biere als vorher, damit Wiederbelebungs-Würfe immer verfügbar sind.
     this.beers = this.physics.add.staticGroup();
+    this.powerups = this.physics.add.staticGroup();
     for (const p of this.terrain) {
       const w = p.end - p.start;
       if (w < 200) continue;
@@ -1095,8 +1196,10 @@ class HikeScene extends Phaser.Scene {
     this.trampolines = this.physics.add.staticGroup();
     this.floatingPlatforms = this.physics.add.staticGroup();
     this.psycheMushrooms = this.physics.add.staticGroup();
-    for (let _trampSection = 0; _trampSection < 2; _trampSection++) {
-      const sectIdx = _trampSection === 0 ? 1 : 2;
+    // Sektion 2 hat den Baum-Blocker am Ende — würde es dort ein Trampolin
+    // geben, könnte man den Baum einfach überspringen. Deshalb nur Sektion 1.
+    for (let _trampSection = 0; _trampSection < 1; _trampSection++) {
+      const sectIdx = 1;
       const inSection = this.terrain.filter(p => p.sectionIndex === sectIdx);
       // Höchstes Plateau (kleinster topY) finden, aber nicht das mit der
       // Brauerei (sonst klebt das Trampolin am Schild)
@@ -1168,6 +1271,15 @@ class HikeScene extends Phaser.Scene {
       for (let fi = 0; fi < NUM_FLOATS; fi++) {
         const cx = sectStart + 60 + fi * (FLOAT_W + gapBetween) + FLOAT_W / 2;
         addFloatPlat(cx, platY, FLOAT_W);
+        if (fi === 0) {
+          const pu = this.powerups.create(cx, platY - 22, 'powerup-stamina');
+          pu.body.setSize(28, 28);
+          pu.body.updateFromGameObject();
+          this.tweens.add({
+            targets: pu, scaleX: 1.15, scaleY: 1.15,
+            yoyo: true, duration: 700, repeat: -1, ease: 'Sine.inOut'
+          });
+        }
         if (Math.abs(cx - trampX) < nearestDist) {
           nearestDist = Math.abs(cx - trampX);
           nearestX = cx;
@@ -1219,7 +1331,7 @@ class HikeScene extends Phaser.Scene {
       }
     }
 
-    // --- Wander-Gegner (Eichhörnchen im Wald, Patrouille auf Wiese) ---
+    // --- Wander-Gegner (Eichhörnchen im Wald, besoffene Gäste auf Wiese/Gipfel) ---
     this.hikeEnemies = this.physics.add.group();
     const enemyNearBrewery = (x) => this.breweries.some(b => Math.abs(b.x - x) < 130);
     const spawnPatrolEnemy = (p, texKey, speed) => {
@@ -1236,6 +1348,11 @@ class HikeScene extends Phaser.Scene {
       if (texKey === 'enemy-squirrel') {
         e.body.setSize(34, 34);
         e.body.setOffset(7, 8);
+      } else if (texKey === 'enemy-drunk') {
+        // 64×102 ≈ 93 % Spielerhöhe (70×110), Hitbox etwas schmaler
+        e.setScale(1);
+        e.body.setSize(30, 86);
+        e.body.setOffset(17, 10);
       } else {
         e.setScale(1.25);
         e.body.setSize(28, 44);
@@ -1274,7 +1391,7 @@ class HikeScene extends Phaser.Scene {
         placedSqX.push(sqCx);
       }
     }
-    // Wiese-Nazis: max 3, ~35 % Chance, Mindestabstand 700 px
+    // Wiese: besoffene Gäste, max 3, ~35 % Chance, Mindestabstand 700 px
     const PATROL_MIN_DIST = 700;
     let pr = 0;
     const placedPrX = [];
@@ -1283,12 +1400,12 @@ class HikeScene extends Phaser.Scene {
       if (Math.random() > 0.65) continue;
       const prCx = (p.start + p.end) / 2;
       if (placedPrX.some(px => Math.abs(px - prCx) < PATROL_MIN_DIST)) continue;
-      if (spawnPatrolEnemy(p, 'enemy-patrol', 70 + Math.random() * 30)) {
+      if (spawnPatrolEnemy(p, 'enemy-drunk', 56 + Math.random() * 26)) {
         pr++;
         placedPrX.push(prCx);
       }
     }
-    // Gipfel-Nazis: max 3, ~40 % Chance, Mindestabstand 700 px
+    // Gipfel: besoffene Gäste, max 3, ~40 % Chance, Mindestabstand 700 px
     let pk = 0;
     const placedPkX = [];
     for (const p of this.terrain) {
@@ -1296,11 +1413,53 @@ class HikeScene extends Phaser.Scene {
       if (Math.random() > 0.60) continue;
       const pkCx = (p.start + p.end) / 2;
       if (placedPkX.some(px => Math.abs(px - pkCx) < PATROL_MIN_DIST)) continue;
-      if (spawnPatrolEnemy(p, 'enemy-patrol', 65 + Math.random() * 25)) {
+      if (spawnPatrolEnemy(p, 'enemy-drunk', 50 + Math.random() * 24)) {
         pk++;
         placedPkX.push(pkCx);
       }
     }
+
+    // Baum am Ende von Wald-Sektion 2 — kooperativ umhauen.
+    // Mittig auf der LETZTEN Plattform der Sektion (statt blind sectEnds-200),
+    // damit topY garantiert greift und der Baum nicht halb über der Klippe hängt.
+    const lastForestPlat = this.terrain
+      .filter(p => p.sectionIndex === 2)
+      .sort((a, b) => a.start - b.start)
+      .pop();
+    const treeX = lastForestPlat
+      ? (lastForestPlat.start + lastForestPlat.end) / 2
+      : this.sectEnds[2] - 200;
+    const treeGroundY = lastForestPlat ? lastForestPlat.topY : this.topYAt(treeX);
+    this._treeBlockerX = treeX;
+    this._treeBlockerY = treeGroundY;
+
+    // Sichtbarer Baum: 640 px hoch, Origin am Fuß.
+    this._treeObj = this.add.image(treeX, treeGroundY, 'tree-blocker')
+      .setOrigin(0.5, 1).setDepth(15);
+
+    // Hitbox: praktisch volle Baumhöhe (600 px), 80 px breit. Da steht
+    // niemand mehr drüber — Trampolin-Apex liegt nur ~500 px über der Platte.
+    const bodyW = 80, bodyH = 600;
+    const treeBody = this.add.rectangle(treeX, treeGroundY - bodyH / 2, bodyW, bodyH, 0, 0);
+    this.physics.add.existing(treeBody, true);
+    treeBody.body.updateFromGameObject();
+    treeBody._isTreeBlocker = true;
+    this._treeBodyObj = treeBody;
+    this.ground.add(treeBody);
+
+    this._treeEventActive = false;
+    this._treeEventDone = false;
+    // Per-Spieler-Tap-Counter — fairer Beitrag, gleiche Anzahl pro Person.
+    // Ziel pro Spieler = TARGET_PER_PLAYER (30), Gesamt = N * 30.
+    this._treeChopPerPlayer = new Map();
+    this._treeChopTaps = 0;
+    this._treeChopTarget = 30;        // wird beim Aktivieren auf N*30 gesetzt
+    this._treeChopPlayerCount = 0;     // wird beim Aktivieren eingefroren
+    this._treeLastActionByPlayer = new Map();
+    this._treeProgressBar = null;
+    this._treeProgressBg = null;
+    this._treeInstructionText = null;
+    this._treeCounterText = null;
 
     // --- Rolling-Stones: Gruppe sofort, Spawner-Timer erst nach Mission-Banner-Dismiss
     this.rollingStones = this.physics.add.group();
@@ -1391,7 +1550,8 @@ class HikeScene extends Phaser.Scene {
     // Regeln — je eine Icon-Zeile
     const rules = [
       { icon: '🚩', text: 'Gemeinsam zur Flagge — erst wenn alle da sind, ist gewonnen' },
-      { icon: '🍺', text: 'K.O.? Mitspieler nah dran → TRINKEN drücken zum Aufwecken' },
+      { icon: '🍺', text: 'K.O.? Mitspieler nah dran → TRINKEN zum Aufwecken; sonst: weniger Bier beim Nachbarn → eine Dose abgeben' },
+      { icon: '🐿️', text: 'Gegner: von oben draufspringen wie Mario → erledigt' },
       { icon: '🪨', text: 'Rollende Steine legen euch mit einem Treffer K.O.' },
     ];
     let ry = H * 0.25;
@@ -1526,19 +1686,35 @@ class HikeScene extends Phaser.Scene {
         });
       });
     });
-    // Geröll-Lawine in Akt 3 (Felsgipfel: Sektion 3 + 4) — schnellere Frequenz
+    // Geröll-Lawine in Akt 3–4 (Felsgipfel): Sektion 4 = schwerster Teil, mehr + schneller
     for (const i of [3, 4]) {
       if (this.sectStarts[i] === undefined) continue;
-      const firstDelay = 8000 + Math.random() * 3000;
+      const isPeak = i === 4;
+      const firstDelay = isPeak ? 5200 + Math.random() * 2200 : 6800 + Math.random() * 2800;
       this.time.delayedCall(firstDelay, () => {
         this.spawnAvalancheRock(i);
         this.time.addEvent({
-          delay: 6500 + Math.random() * 3000,
+          delay: isPeak ? (2600 + Math.random() * 1600) : (4200 + Math.random() * 2400),
           loop: true,
-          callback: () => this.spawnAvalancheRock(i)
+          callback: () => {
+            this.spawnAvalancheRock(i);
+            if (isPeak && !this.gameWon && !this.gameLost && Math.random() < 0.42) {
+              this.time.delayedCall(450 + Math.random() * 350, () => {
+                if (!this.gameWon && !this.gameLost) this.spawnAvalancheRock(i);
+              });
+            }
+          }
         });
       });
     }
+  }
+
+  /** Liegt eine Welt-Position im sichtbaren Camera-Ausschnitt (mit Padding)? */
+  _isInCameraView(x, y, padX = 200, padY = 200) {
+    const v = this.cameras && this.cameras.main && this.cameras.main.worldView;
+    if (!v) return true;
+    return x >= v.x - padX && x <= v.x + v.width + padX &&
+           y >= v.y - padY && y <= v.y + v.height + padY;
   }
 
   /** Helper: gibt es einen aktiven Spieler in der Nähe der Spawn-X? */
@@ -1559,10 +1735,6 @@ class HikeScene extends Phaser.Scene {
     const sEnd = this.sectEnds[sectionIndex];
     // Im inneren 80% der Sektion spawnen — nicht direkt am Bach-Rand
     const x = sStart + (sEnd - sStart) * (0.1 + Math.random() * 0.8);
-    // Nur spawnen wenn Spieler in der Sektion (oder direkt davor) sind —
-    // sonst fallen blind Steine in einer Leeren Sektion herum während die
-    // Crew noch in der Wiese ist.
-    if (!this._hasActivePlayerNear(x, 1800)) return;
 
     // Warn-Indikator: am Bildschirm-Top, X folgt der Welt mit
     const warn = this.add.text(x, 30, '⚠ LAWINE!', {
@@ -1583,23 +1755,31 @@ class HikeScene extends Phaser.Scene {
     this.time.delayedCall(1500, () => {
       warn.destroy();
       arrow.destroy();
-      const stone = this.physics.add.image(x, -380, 'stone-roller');
+      // Depth > Brauerei-Hütte (12–16), sonst rollt der Stein unsichtbar hinter Holz/NPC
+      const stone = this.physics.add.image(x, -380, 'stone-roller').setDepth(28);
       stone.body.setAllowGravity(true);
       stone.body.setGravityY(1200);
-      stone.body.setCircle(18);
-      stone.body.setBounce(0.45, 0.25);
-      // Leichter Seitendrall, damit der Stein nach dem Aufprall rollt
-      const drift = (Math.random() - 0.5) * 180;
-      stone.body.setVelocityX(drift);
-      stone.targetVX = drift !== 0 ? drift : null;
-      stone.rotateSpeed = -8 * Math.sign(drift || 1);
+      // setCircle(radius, offsetX, offsetY) — Offsets zentrieren den 36×36-Kreis
+      // im 44×44-Texturframe, sonst sitzt der Body um (-4,-4) verschoben.
+      stone.body.setCircle(18, 4, 4);
+      stone.body.setBounce(0.35, 0.18);
+      stone.body.reset(x, -380);
+      const rollDir = Math.random() < 0.5 ? -1 : 1;
+      const rollSpeed = 230 + Math.random() * 95;
+      stone.targetVX = rollDir * rollSpeed;
+      stone.body.setVelocityX(rollDir * (55 + Math.random() * 45));
+      stone.rotateSpeed = -11 * rollDir;
       stone.isAvalanche = true;
       this.rollingStones.add(stone);
-      this.physics.add.collider(stone, this.ground);
-      // Nach 12 s wegputzen
+      // Tree-Blocker (Wald-Sektion) wird gefiltert — Steine sollen nicht
+      // an dem unsichtbaren Hindernis kleben
+      this.physics.add.collider(stone, this.ground, null, (s, g) => !g._isTreeBlocker);
       this.time.delayedCall(12000, () => stone.active && stone.destroy());
-      // SFX: kurzer Aufprall-Beep beim Spawn
-      SFX.hit && SFX.hit();
+      // Nur Sound geben, wenn Spawnort im Sichtfeld — sonst hört man's
+      // unangenehm aus weit entfernten Sektionen.
+      if (this._isInCameraView(stone.x, stone.y)) {
+        SFX.hit && SFX.hit();
+      }
     });
   }
 
@@ -1628,6 +1808,13 @@ class HikeScene extends Phaser.Scene {
       beer.destroy();
       player.pickupBeer();
     });
+    if (this.powerups) {
+      this.physics.add.overlap(player.sprite, this.powerups, (sp, pu) => {
+        if (player.knockedOut || player.inWater) return;
+        pu.destroy();
+        player.activateStaminaShield();
+      });
+    }
     this.physics.add.collider(player.sprite, this.obstacles, (sp, obstacle) => {
       if (obstacle && obstacle.isTrunk) {
         if (sp.body.touching.left || sp.body.touching.right) {
@@ -1666,7 +1853,35 @@ class HikeScene extends Phaser.Scene {
     }
     if (this.hikeEnemies) {
       this.physics.add.overlap(player.sprite, this.hikeEnemies, (sp, en) => {
-        if (!en || !en.active || player.knockedOut || player.inWater || player.frozen) return;
+        if (!en || !en.active || en._stompDead || player.knockedOut || player.inWater || player.frozen) return;
+        const pb = sp.body;
+        const eb = en.body;
+        const vx = pb.velocity.x;
+        const vy = pb.velocity.y;
+        const falling = vy > 30;
+        const fromAbove = pb.bottom <= eb.top + 30;
+        const angleOk = Math.abs(vx) <= vy * 1.0 + 80;
+        const xOverlap = pb.right > eb.left + 2 && pb.left < eb.right - 2;
+        const stomp = falling && fromAbove && angleOk && xOverlap;
+        if (stomp) {
+          en._stompDead = true;
+          pb.setVelocityY(-400);
+          player.invulnTimer = Math.max(player.invulnTimer || 0, 0.35);
+          player.popText('💥 STOMP!', '#fef3d4');
+          SFX.jump && SFX.jump();
+          eb.enable = false;
+          this.tweens.add({
+            targets: en,
+            y: en.y + 10,
+            angle: en.flipX ? -0.5 : 0.5,
+            alpha: 0,
+            scaleY: 0.15,
+            duration: 220,
+            ease: 'Quad.in',
+            onComplete: () => { if (en.active) en.destroy(); }
+          });
+          return;
+        }
         const t = this.time.now;
         if (en._lastHitPlayer != null && t - en._lastHitPlayer < 1200) return;
         en._lastHitPlayer = t;
@@ -1711,11 +1926,6 @@ class HikeScene extends Phaser.Scene {
 
   spawnRollingStone(platform) {
     if (!this.rollingStones) return;
-    // Nur rollen, wenn Spieler überhaupt in der Nähe der Brauerei sind.
-    // Range = Sektions-Reichweite (~1000 px). Sonst rollen Steine ins
-    // Leere oder treffen einsame Spieler die woanders sind.
-    const platMid = (platform.start + platform.end) / 2;
-    if (!this._hasActivePlayerNear(platMid, 1100)) return;
     // Zufällige Roll-Richtung (links oder rechts), Stein startet am
     // entsprechenden Plateau-Rand
     const dir = Math.random() < 0.5 ? -1 : 1;
@@ -1743,22 +1953,43 @@ class HikeScene extends Phaser.Scene {
     this.time.delayedCall(1200, () => {
       warn.destroy();
       arrow.destroy();
-      // Doppelte Sicherheitsabfrage: falls Spiel mittlerweile vorbei
       if (this.gameWon || this.gameLost) return;
+      // Spawn deutlich über der Plattform → Stein fällt frei und landet sauber,
+      // statt am Spawnort in einem Body-Overlap stecken zu bleiben.
+      const spawnY = platform.topY - 80;
+      // Depth > Brauerei-Deko (11–16), sonst liegt der Stein visuell hinter der Hütte
       const stone = this.physics.add.image(
-        startX, platform.topY - 25, 'stone-roller'
-      );
+        startX, spawnY, 'stone-roller'
+      ).setDepth(28);
       stone.body.setAllowGravity(true);
       stone.body.setGravityY(900);
-      stone.body.setCircle(18);
+      // setCircle(radius, offsetX, offsetY) — Offsets zentrieren den Body
+      stone.body.setCircle(18, 4, 4);
       stone.body.setBounce(0.35, 0.1);
+      stone.body.reset(startX, spawnY);
       stone.body.setVelocityX(targetVX);
       stone.targetVX = targetVX;
       stone.rotateSpeed = -10 * dir;
       stone.isAvalanche = false;
       this.rollingStones.add(stone);
-      this.physics.add.collider(stone, this.ground);
+      // Tree-Blocker im Wald nicht mit Roll-Steinen kollidieren lassen,
+      // sonst „verschluckt“ er die Brauerei-Steine in Sektion 2.
+      this.physics.add.collider(stone, this.ground, null, (s, g) => !g._isTreeBlocker);
       this.time.delayedCall(14000, () => stone.active && stone.destroy());
+      // Nur Sound, wenn Spawnort im Sichtfeld — sonst dröhnt's aus
+      // weit entfernten Brauereien rein.
+      if (this._isInCameraView(stone.x, stone.y)) {
+        SFX.hit && SFX.hit();
+      }
+      // Falls der Stein nach 0.5 s noch fast steht (Edge-Case Body-Overlap):
+      // einmal kräftig anschubsen.
+      this.time.delayedCall(500, () => {
+        if (!stone.active || !stone.body) return;
+        if (Math.abs(stone.body.velocity.x) < 60) {
+          stone.body.setVelocityX(targetVX);
+          stone.body.setVelocityY(Math.min(stone.body.velocity.y, -120));
+        }
+      });
     });
   }
 
@@ -1998,8 +2229,12 @@ class HikeScene extends Phaser.Scene {
       const camL = this.cameras.main.scrollX;
       this.hikeEnemies.children.iterate((e) => {
         if (!e || !e.active || !e.body) return;
+        if (e._stompDead) return;
         if (e.patrolMin != null && e.patrolMax != null) {
-          const spd = e.patrolSpeed != null ? e.patrolSpeed : Math.max(60, Math.abs(e.body.velocity.x) || 80);
+          let spd = e.patrolSpeed != null ? e.patrolSpeed : Math.max(60, Math.abs(e.body.velocity.x) || 80);
+          if (e.enemyTex === 'enemy-drunk') {
+            spd *= 0.78 + 0.22 * Math.sin(this.time.now * 0.0035 + e.x * 0.012);
+          }
           if (e.patrolDir == null) e.patrolDir = e.body.velocity.x >= 0 ? 1 : -1;
           if (e.x < e.patrolMin) e.patrolDir = 1;
           else if (e.x > e.patrolMax) e.patrolDir = -1;
@@ -2029,9 +2264,150 @@ class HikeScene extends Phaser.Scene {
         if (p.sprite.body.velocity.x > 0) p.sprite.body.setVelocityX(0);
       }
     }
+
+    this._updateTreeEvent();
   }
 
-  respawnAtLastCheckpoint(player) {
+  _updateTreeEvent() {
+    if (this._treeEventDone || !this._treeObj) return;
+    const treeX = this._treeBlockerX != null ? this._treeBlockerX : this.sectEnds[2] - 200;
+    const RANGE = 180;
+
+    const eligible = [];
+    for (const p of this.players.values()) {
+      if (p.knockedOut || p.inWater || p.frozen) continue;
+      if (p.sprite.x > this.sectStarts[2]) eligible.push(p);
+    }
+    if (eligible.length === 0) return;
+
+    const allAtTree = eligible.every(p => Math.abs(p.sprite.x - treeX) < RANGE);
+
+    if (allAtTree && !this._treeEventActive) {
+      this._treeEventActive = true;
+      this._treeChopTaps = 0;
+      // Anzahl Spieler beim Aktivieren einfrieren — Mid-Event-Joins sollen
+      // nicht plötzlich das Ziel hochziehen (sonst wird's frustrierend).
+      this._treeChopPlayerCount = eligible.length;
+      const TARGET_PER_PLAYER = 30;
+      this._treeChopTarget = eligible.length * TARGET_PER_PLAYER;
+      this._treeChopPerPlayer = new Map();
+      for (const p of eligible) this._treeChopPerPlayer.set(p.id, 0);
+
+      const bgY = (this._treeBlockerY != null ? this._treeBlockerY : this.topYAt(treeX)) - 360;
+      this._treeProgressBg = this.add.rectangle(treeX, bgY, 180, 20, 0x3d1a06)
+        .setStrokeStyle(2, 0xf4c842).setDepth(100);
+      this._treeProgressBar = this.add.rectangle(treeX - 88, bgY, 2, 16, 0x6dbf47)
+        .setOrigin(0, 0.5).setDepth(101);
+      this._treeInstructionText = this.add.text(treeX, bgY - 28,
+        `${TARGET_PER_PLAYER}× ACTION PRO SPIELER!`, {
+        fontFamily: 'Bungee, sans-serif', fontSize: '14px', color: '#f4c842',
+        stroke: '#000', strokeThickness: 4
+      }).setOrigin(0.5).setDepth(101);
+      this._treeCounterText = this.add.text(treeX, bgY,
+        `0 / ${this._treeChopTarget}`, {
+        fontFamily: 'Bungee, sans-serif', fontSize: '12px', color: '#fef3d4',
+        stroke: '#000', strokeThickness: 3
+      }).setOrigin(0.5).setDepth(102);
+      socket.emit('broadcast-controllers', 'tree-event-start');
+    }
+
+    if (!allAtTree && this._treeEventActive) {
+      // Wer wegrennt, bricht das Event nicht ab — Fortschritt bleibt erhalten.
+      // Aber Action-Edges aller Spieler resetten, damit ein gehaltener Knopf
+      // bei Rückkehr nicht als Tap gezählt wird.
+      this._treeLastActionByPlayer.clear();
+      return;
+    }
+
+    if (this._treeEventActive) {
+      const TARGET = this._treeChopTarget;
+      for (const p of eligible) {
+        // Nur Spieler aus dem ursprünglichen Cast tracken (Mid-Joiner schauen zu)
+        if (!this._treeChopPerPlayer.has(p.id)) continue;
+        const inRange = Math.abs(p.sprite.x - treeX) < RANGE;
+        const inp = playerInputs.get(p.id) || {};
+        const wasDown = this._treeLastActionByPlayer.get(p.id) || false;
+        const isDown = !!inp.action;
+        if (inRange && isDown && !wasDown) {
+          this._treeChopPerPlayer.set(p.id, (this._treeChopPerPlayer.get(p.id) || 0) + 1);
+          this._treeChopTaps = Math.min(TARGET, this._treeChopTaps + 1);
+          if (this._treeObj) {
+            const dir = (this._treeChopTaps % 2 === 0) ? -1 : 1;
+            this.tweens.add({
+              targets: this._treeObj,
+              angle: { from: 0, to: 4 * dir },
+              duration: 70, yoyo: true, ease: 'Sine.easeInOut'
+            });
+          }
+          this.cameras.main.shake(70, 0.004);
+          SFX.hit && SFX.hit();
+        }
+        this._treeLastActionByPlayer.set(p.id, isDown);
+      }
+      if (this._treeProgressBar) {
+        this._treeProgressBar.width = (this._treeChopTaps / TARGET) * 176;
+      }
+      if (this._treeCounterText) {
+        this._treeCounterText.setText(`${this._treeChopTaps} / ${TARGET}`);
+      }
+      if (this._treeChopTaps >= TARGET) {
+        this._felTree(eligible);
+      }
+    }
+  }
+
+  _felTree(eligible) {
+    this._treeEventDone = true;
+    if (this._treeProgressBar) {
+      this._treeProgressBar.destroy();
+      this._treeProgressBar = null;
+    }
+    if (this._treeProgressBg) {
+      this._treeProgressBg.destroy();
+      this._treeProgressBg = null;
+    }
+    if (this._treeInstructionText) {
+      this._treeInstructionText.destroy();
+      this._treeInstructionText = null;
+    }
+    if (this._treeCounterText) {
+      this._treeCounterText.destroy();
+      this._treeCounterText = null;
+    }
+
+    if (this._treeObj) {
+      this.tweens.add({
+        targets: this._treeObj,
+        angle: 90,
+        x: this._treeObj.x + 120,
+        y: this._treeObj.y + 20,
+        duration: 1200,
+        ease: 'Cubic.in',
+        onComplete: () => {
+          if (this._treeObj) {
+            this._treeObj.destroy();
+            this._treeObj = null;
+          }
+        }
+      });
+    }
+    if (this._treeBodyObj) {
+      this.ground.remove(this._treeBodyObj, true, true);
+      this._treeBodyObj = null;
+    }
+
+    for (const p of eligible) {
+      p.stamina = p.maxStamina;
+      p.beerInventory += 2;
+      p.drunkenness = Math.max(0, p.drunkenness - 30);
+      p.popText('TIMBER! +VOLL +2 BIER', '#6dbf47');
+    }
+    this.cameras.main.shake(400, 0.012);
+    SFX.hit && SFX.hit();
+    socket.emit('broadcast-controllers', 'tree-event-end');
+  }
+
+  respawnAtLastCheckpoint(player, opts = {}) {
     // Letzten Brauerei-Checkpoint vor (oder gleich) der aktuellen Position finden,
     // sonst Start des Levels.
     let respawnX = 150;
@@ -2047,7 +2423,20 @@ class HikeScene extends Phaser.Scene {
     player.sprite.y = (this.topYAt ? this.topYAt(respawnX) : this.GROUND_Y) - 120;
     player.sprite.body.setVelocity(0, 0);
     player.stamina = Math.max(0, player.stamina - 30);
-    player.popText('💦 INS WASSER!', '#3a7aa8');
+    player.knockedOut = false;
+    player.inWater = false;
+    player.koTimer = 0;
+    player.sprite.body.setAllowGravity(true);
+    player.sprite.body.setSize(34, 90);
+    player.sprite.body.setOffset(18, 18);
+    player.sprite.body.reset(player.sprite.x, player.sprite.y);
+    if (player.sprite.setRotation) player.sprite.setRotation(0);
+    if (player.label) {
+      player.label.setText(player.charData.name);
+      player.label.setPosition(player.sprite.x, player.sprite.y - 70);
+    }
+    const msg = opts.message != null ? opts.message : '💦 INS WASSER!';
+    player.popText(msg, '#3a7aa8');
     this.cameras.main.flash(180, 60, 120, 200);
   }
 
@@ -2232,6 +2621,33 @@ class HikePlayer {
     // Schumi kriegt 'nen kleinen grünen Glow (passt zum Joint)
     if (charData.id === 'schumi') {
       this.aura = scene.add.circle(x, y, 45, 0x88ff88, 0.15);
+
+      // Qualm-Textur einmalig generieren (kleines weiches Wölkchen).
+      // Wir bauen sie hier on-demand statt im preload(), damit auch dynamisch
+      // joinende Schumis sie kriegen, ohne die Scene umbauen zu müssen.
+      if (!scene.textures.exists('smoke-puff')) {
+        const g = scene.make.graphics({ x: 0, y: 0, add: false });
+        g.fillStyle(0xffffff, 0.55); g.fillCircle(8, 8, 8);
+        g.fillStyle(0xffffff, 0.85); g.fillCircle(8, 8, 5);
+        g.fillStyle(0xffffff, 1.00); g.fillCircle(8, 8, 3);
+        g.generateTexture('smoke-puff', 16, 16);
+        g.destroy();
+      }
+
+      // Partikel-Qualm steigt aus dem Glut-Punkt des Joints auf.
+      // Position wird in update() jeden Frame an den Mundwinkel nachgezogen
+      // und beim Sprite-Flip mitgespiegelt.
+      this.smokeEmitter = scene.add.particles(x, y, 'smoke-puff', {
+        lifespan:  { min: 900, max: 1500 },
+        speedX:    { min: -18, max: 18 },
+        speedY:    { min: -65, max: -35 },
+        scale:     { start: 0.35, end: 1.1 },
+        alpha:     { start: 0.55, end: 0 },
+        tint:      [0xeeeeee, 0xc8c8c8, 0xa8a8a8],
+        rotate:    { min: 0, max: 360 },
+        frequency: 220
+      });
+      this.smokeEmitter.setDepth((this.sprite.depth || 0) + 1);
     }
 
     // Name oben
@@ -2258,6 +2674,10 @@ class HikePlayer {
     this.koTimer = 0;
     this.inWater = false;           // treibt im Bach — nur Mitspieler kann ziehen
 
+    this.staminaShield = false;
+    this.staminaShieldTimer = 0;
+    this._shieldAura = null;
+
     // Input-Latches
     this.drinkLatch = false;
     this.actionLatch = false;
@@ -2267,6 +2687,20 @@ class HikePlayer {
   update(input, delta) {
     const dt = delta / 1000;
     const body = this.sprite.body;
+
+    if (this.staminaShieldTimer > 0) {
+      this.staminaShieldTimer -= dt;
+      if (this.staminaShieldTimer <= 0) {
+        this.staminaShield = false;
+        if (this._shieldAura) {
+          this._shieldAura.destroy();
+          this._shieldAura = null;
+        }
+        this.popText('SCHUTZ ABGELAUFEN', '#c94f4f');
+      } else if (this._shieldAura && this.sprite.active) {
+        this._shieldAura.setPosition(this.sprite.x, this.sprite.y - 20);
+      }
+    }
 
     // Eingefroren (z.B. Sieg-Banner aktiv) → einfach stehen bleiben
     if (this.frozen) {
@@ -2314,7 +2748,7 @@ class HikePlayer {
         }
       } else {
         body.setVelocityY(-650);
-        this.stamina = Math.max(0, this.stamina - 8);
+        this.stamina = Math.max(0, this.stamina - (this.staminaShield ? 0 : 8));
         SFX.jump();
       }
     }
@@ -2356,7 +2790,7 @@ class HikePlayer {
     // Stamina-Drain beim Bewegen, sehr schwacher Regen wenn still.
     // Bewusst hart: man MUSS Brauereien und Trinken benutzen, sonst kommt
     // man nicht durch. Stehenbleiben regeneriert nur ein bisschen.
-    if (left || right) {
+    if ((left || right) && !this.staminaShield) {
       this.stamina = Math.max(0, this.stamina - dt * 7);
     } else {
       this.stamina = Math.min(this.maxStamina, this.stamina + this.staminaRegen * dt * 1.5);
@@ -2386,6 +2820,19 @@ class HikePlayer {
     if (this.sprite.setFlipX) {
       if (left) this.sprite.setFlipX(true);
       else if (right) this.sprite.setFlipX(false);
+    }
+
+    // Schumis Qualm zieht aus dem Glut-Punkt am Mundwinkel.
+    // Im 14×22-Grid (5 px/cell) sitzt die Glut bei (col=13, row=9), Origin
+    // mittig — also Offset ≈ (+32, -8) vom Sprite-Center, bei Flip gespiegelt.
+    if (this.smokeEmitter) {
+      const dirX = this.sprite.flipX ? -1 : 1;
+      this.smokeEmitter.setPosition(
+        this.sprite.x + 32 * dirX,
+        this.sprite.y - 8
+      );
+      // Im KO-Zustand qualmt der Joint nicht weiter
+      this.smokeEmitter.emitting = !this.knockedOut && !this.frozen;
     }
     // Wenn besoffen: Sprite kippt sichtbar hin und her
     if (isDrunk && this.sprite.setRotation) {
@@ -2442,9 +2889,20 @@ class HikePlayer {
     SFX.pickup();
   }
 
-  // Trinken-Knopf: zwei Modi.
+  activateStaminaShield() {
+    this.staminaShield = true;
+    this.staminaShieldTimer = 120;
+    this.popText('STAMINASCHUTZ 2 MIN!', '#f4c842');
+    SFX.brewery && SFX.brewery();
+    if (!this._shieldAura) {
+      this._shieldAura = this.scene.add.circle(0, 0, 28, 0xf4c842, 0.25).setDepth(5);
+    }
+  }
+
+  // Trinken-Knopf: drei Modi.
   // 1) K.O.-Mitspieler in der Nähe → wirf Bier auf ihn → er wacht auf
-  // 2) Sonst → selbst trinken (Stamina rauf, Promille rauf)
+  // 2) Lebend + nah + hat weniger Dosen als du → eine Bierdose abgeben (kein Promille)
+  // 3) Sonst → selbst trinken (Stamina rauf, Promille rauf)
   manualDrink() {
     if (this.beerInventory <= 0) {
       this.popText('LEER!', '#c94f4f');
@@ -2466,6 +2924,27 @@ class HikePlayer {
       this.beerInventory--;
       this.throwReviveBeer(koTarget);
       this.popText('🍻 → ' + koTarget.charData.name.toUpperCase(), '#6dbf47');
+      return;
+    }
+
+    // Koop: Mitspieler mit weniger Bier im Inventar eine Dose reichen
+    let giveTarget = null;
+    let bestGive = 125;
+    for (const other of this.scene.players.values()) {
+      if (other === this) continue;
+      if (other.knockedOut || other.frozen) continue;
+      if (other.beerInventory >= this.beerInventory) continue;
+      const dx = other.sprite.x - this.sprite.x;
+      const dy = other.sprite.y - this.sprite.y;
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < bestGive) { bestGive = d; giveTarget = other; }
+    }
+    if (giveTarget) {
+      this.beerInventory--;
+      giveTarget.beerInventory++;
+      this.popText('🍺 → ' + giveTarget.charData.name.toUpperCase(), '#6dbf47');
+      giveTarget.popText('🍺 +1', '#f4c842');
+      SFX.pickup();
       return;
     }
 
@@ -2507,6 +2986,8 @@ class HikePlayer {
     // daher schwebt der Sprite sonst über dem Boden.
     this.sprite.body.setSize(70, 34);
     this.sprite.body.setOffset(0, 58);
+    this.sprite.body.setVelocity(0, 0);
+    this.sprite.body.reset(this.sprite.x, this.sprite.y);
     this.scene.tweens.add({
       targets: this.sprite, rotation: Math.PI / 2, duration: 400, ease: 'Bounce.out'
     });
@@ -2530,26 +3011,48 @@ class HikePlayer {
   }
 
   // Helfer ruft das auf: ziehe einen Mitspieler aus dem Bach.
-  // Bedingung: Helfer steht oben (nicht im Wasser), Zielspieler ist im
-  // Wasser, dx <100 px, dy <140 px. Helfer zahlt 12 Stamina.
+  // Bedingung: Helfer nicht im Wasser, Ziel im Wasser, |dx| < 120 px.
+  // Vertikal: Opfer muss mindestens etwas unter dem Helfer sein (Ufer
+  // oberhalb Bach), aber nicht unrealistisch weit — nicht umgekehrt
+  // (dy war früher helper.y - victim.y und verworf alles mit Helfer
+  // deutlich höher, also fast immer).
   tryPullFromWater() {
     if (this.inWater) return false;
     if (this.stamina < 8) return false;
     let target = null;
-    let bestDist = 100;
+    let bestDist = 120;
     for (const other of this.scene.players.values()) {
       if (other === this) continue;
       if (!other.inWater) continue;
       const dx = Math.abs(other.sprite.x - this.sprite.x);
-      const dy = this.sprite.y - other.sprite.y; // Helfer höher als Ziel
-      if (dy < -40 || dy > 160) continue;
+      const victimBelow = other.sprite.y - this.sprite.y;
+      if (victimBelow < 25 || victimBelow > 260) continue;
       if (dx < bestDist) { bestDist = dx; target = other; }
     }
     if (!target) return false;
-    // Ziel direkt aus dem Wasser ziehen
+    // Ziel direkt aus dem Wasser ziehen (K.O. im Bach: auch aufwecken)
     target.sprite.x = this.sprite.x + (this.sprite.x < target.sprite.x ? 30 : -30);
     target.exitWater();
-    target.popText('🤝 GERETTET!', '#6dbf47');
+    if (target.knockedOut) {
+      target.knockedOut = false;
+      target.drunkenness = 30;
+      target.stamina = Math.max(target.stamina, 50);
+      target.sprite.body.setAllowGravity(true);
+      target.sprite.body.setVelocity(0, 0);
+      target.sprite.body.setSize(34, 90);
+      target.sprite.body.setOffset(18, 18);
+      target.sprite.body.reset(target.sprite.x, target.sprite.y);
+      this.scene.tweens.add({
+        targets: target.sprite, rotation: 0, duration: 300
+      });
+      if (target.label) {
+        target.label.setText(target.charData.name);
+        target.label.setPosition(target.sprite.x, target.sprite.y - 70);
+      }
+      target.popText('🤝 GERETTET & WACH!', '#6dbf47');
+    } else {
+      target.popText('🤝 GERETTET!', '#6dbf47');
+    }
     target.sprite.body.setVelocityY(-200);
     this.stamina = Math.max(0, this.stamina - 12);
     this.popText('✊ → ' + target.charData.name.toUpperCase(), '#a0d8e8');
@@ -2622,6 +3125,14 @@ class HikePlayer {
     this.inWater = true;
     this.sprite.body.setAllowGravity(false);
     this.popText('💦 INS WASSER!', '#3a7aa8');
+    // Solo: dauerhafte Rettung gibt's nur per Action-Knopf — Hinweis sofort zeigen
+    if (this.scene.players && this.scene.players.size === 1) {
+      this.scene.time.delayedCall(550, () => {
+        if (this.inWater && this.sprite.active) {
+          this.popText('★ = RESPAWN', '#f4c842');
+        }
+      });
+    }
     this.scene.cameras.main.flash(150, 60, 120, 200);
     SFX.splash();
   }
@@ -2675,8 +3186,25 @@ class HikePlayer {
       this.sprite.setRotation(Math.sin(this.scene.time.now / 200) * 0.1);
     }
 
-    // Bei Stamina 0 im Wasser → K.O. (Mitspieler muss mit Bier wiederbeleben)
+    const isSolo = this.scene.players && this.scene.players.size === 1;
+
+    // Solo: Action-Knopf löst sofortigen Respawn an der letzten Brauerei aus.
+    // Im Koop bleibt es beim Mitspieler-Pull — Action macht nichts im Wasser.
+    if (isSolo && input.action && !this.actionLatch) {
+      this.actionLatch = true;
+      this.exitWater();
+      this.scene.respawnAtLastCheckpoint(this, { message: '💦 ALLEINE — RESPAWN!' });
+      return;
+    }
+    if (!input.action) this.actionLatch = false;
+
+    // Bei Stamina 0 im Wasser → Koop: K.O.; Solo: Auto-Respawn (Sicherheitsnetz)
     if (this.stamina <= 0 && !this.knockedOut) {
+      if (isSolo) {
+        this.exitWater();
+        this.scene.respawnAtLastCheckpoint(this, { message: '💦 ALLEINE — RESPAWN!' });
+        return;
+      }
       this.becomeKnockedOut('drowning');
     }
 
@@ -2852,7 +3380,8 @@ class HikePlayer {
     if (this.knockedOut) return;
     if (this.invulnTimer > 0) return;
     this.invulnTimer = 1.2;
-    SFX.hit();
+    if (enemyTex === 'enemy-drunk') SFX.drunkBump();
+    else SFX.hit();
     const dmg = 25;
     this.stamina = Math.max(0, this.stamina - dmg);
     const drunkAdd = this.charData.stats.drunkImmune ? 4 : 12;
@@ -2866,7 +3395,9 @@ class HikePlayer {
     const knockDir = vx > 0 ? -1 : (vx < 0 ? 1 : (Math.random() < 0.5 ? -1 : 1));
     this.sprite.body.setVelocityX(knockDir * 280);
     this.sprite.body.setVelocityY(-320);
-    let msg = enemyTex === 'enemy-squirrel' ? 'BISS! -' + dmg : 'HALT! -' + dmg;
+    let msg = enemyTex === 'enemy-squirrel' ? 'BISS! -' + dmg
+      : enemyTex === 'enemy-drunk' ? 'UUPS! -' + dmg
+        : 'HALT! -' + dmg;
     if (beerLost) msg += '  🍺-1';
     this.popText(msg, '#c94f4f');
     this.scene.tweens.add({
@@ -2881,6 +3412,8 @@ class HikePlayer {
     this.sprite.destroy();
     this.label.destroy();
     if (this.aura) this.aura.destroy();
+    if (this.smokeEmitter) this.smokeEmitter.destroy();
+    if (this._shieldAura) this._shieldAura.destroy();
     if (this.hudStaminaFill) this.hudStaminaFill.destroy();
     if (this.hudStaminaBg)   this.hudStaminaBg.destroy();
     if (this.hudDrunkBar)    this.hudDrunkBar.destroy();

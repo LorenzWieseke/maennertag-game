@@ -10,3 +10,6 @@ Thumbs.db
 
 # Per CLI installierte Agent-Skills (z. B. npx skills add …)
 .agents/
+
+# Lokale visuelle Self-Test-Screenshots (siehe scripts/shoot.js)
+screenshots/

@@ -170,6 +170,12 @@ io.on('connection', (socket) => {
     io.to('host').emit('player-input', { id: socket.id, input: p.input });
   });
 
+  // Host benachrichtigt alle Controller (z. B. Baum-Event)
+  socket.on('broadcast-controllers', (eventName, payload) => {
+    if (socket.id !== hostSocketId || !eventName) return;
+    socket.broadcast.emit(eventName, payload);
+  });
+
   // Optional: Einzel-Event für haptisches Feedback bei wichtigen Momenten
   socket.on('haptic', () => {
     socket.emit('vibrate');

@@ -216,6 +216,26 @@ document.querySelectorAll('[data-input]').forEach(btn => {
   });
 });
 
+// Baum-Event: kein Schütteln (zu viel iOS-Permission-Theater) — der Host
+// zählt einfach 10× ACTION-Press. Hier nur ein dezentes Overlay als Hinweis.
+function showChopOverlay(visible) {
+  let overlay = document.getElementById('chop-overlay');
+  if (!overlay && visible) {
+    overlay = document.createElement('div');
+    overlay.id = 'chop-overlay';
+    overlay.style.cssText = `
+      position:fixed; bottom:120px; left:50%; transform:translateX(-50%);
+      background:#1a0f08cc; color:#f4c842; font-family:Bungee,sans-serif;
+      font-size:22px; padding:14px 28px; border-radius:12px;
+      border:2px solid #f4c842; text-align:center; z-index:999; pointer-events:none;
+      letter-spacing: 0.05em;
+    `;
+    overlay.innerHTML = '30× ACTION HÄMMERN!';
+    document.body.appendChild(overlay);
+  }
+  if (overlay) overlay.style.display = visible ? 'block' : 'none';
+}
+
 // Reconnect / neuer Host: gleiche Join-Logik (nach Host-Reload ist players
 // leer, aber unser Socket lebt noch — dann kommt host-ready vom Server).
 function tryRejoinGame() {
@@ -229,6 +249,15 @@ function tryRejoinGame() {
 socket.on('connect', tryRejoinGame);
 
 socket.on('host-ready', tryRejoinGame);
+
+socket.on('tree-event-start', () => {
+  showChopOverlay(true);
+  if (navigator.vibrate) navigator.vibrate([30, 60, 30]);
+});
+
+socket.on('tree-event-end', () => {
+  showChopOverlay(false);
+});
 
 socket.on('disconnect', () => {
   toast('Verbindung verloren …', 4000);
