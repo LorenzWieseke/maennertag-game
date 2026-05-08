@@ -120,6 +120,10 @@ io.on('connection', (socket) => {
     hostSocketId = socket.id;
     socket.join('host');
     socket.emit('player-list', Array.from(players.values()));
+    // Controller-Sockets, die noch offen sind (Host war kurz weg), feuern kein
+    // zweites "connect" — sie sollen join-game erneut senden, damit die Lobby
+    // wieder gefüllt wird.
+    socket.broadcast.emit('host-ready');
     console.log('[★] Host registriert:', socket.id);
   });
 

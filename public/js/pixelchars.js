@@ -243,15 +243,23 @@
       cells[9][7] = 0x8a4a2a;
     }
 
-    // ===== Accessoire: Joint (Schumi) — länger, deutlich sichtbar =====
-    // Geht von der rechten Hand schräg nach oben rechts mit Glut + Rauch
+    // ===== Accessoire: Joint (Schumi) — längere Diagonale, kräftige Glut =====
+    // Von rechter Hand (row 14) schräg nach oben-rechts; dickeres „Papier“
     if (spec.joint) {
-      cells[14][12] = 0xf8f8f8;  // Papier am Hand-Anschluss
-      cells[13][12] = 0xf8f8f8;  // Papier mittig
-      cells[12][13] = 0xf8f8f8;  // Papier oben
-      cells[11][13] = 0xff8a3a;  // glühende Spitze
-      cells[10][13] = 0xc4c4c4;  // Rauch
-      cells[9][13]  = 0xa0a0a0;  // Rauch (höher)
+      cells[14][11] = 0xf0f0f0;
+      cells[14][12] = 0xf8f8f8;
+      cells[14][13] = 0xf0f0f0;
+      cells[13][12] = 0xf8f8f8;
+      cells[13][13] = 0xf8f8f8;
+      cells[12][13] = 0xf8f8f8;
+      cells[12][14] = 0xe8e8e8;
+      cells[11][13] = 0xffcc88;
+      cells[11][14] = 0xff6a18;  // Glutkern
+      cells[10][14] = 0xff4400;
+      cells[9][14]  = 0xc8c8c8;   // Rauch
+      cells[8][14]  = 0xa8a8a8;
+      cells[7][14]  = 0x909090;
+      cells[10][13] = 0xffaa66;  // Glut-Halo
     }
 
     // ===== Accessoire: Angel (Jan) — Rute geht diagonal hoch =====

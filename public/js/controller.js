@@ -216,17 +216,19 @@ document.querySelectorAll('[data-input]').forEach(btn => {
   });
 });
 
-// Reconnect/Reload-Recovery:
-// Wenn wir noch einen Charakter aus dieser Session kennen (Memory ODER
-// sessionStorage nach Reload), automatisch wieder beitreten. Der Server
-// hat unsere alte Session über die clientId schon geräumt.
-socket.on('connect', () => {
+// Reconnect / neuer Host: gleiche Join-Logik (nach Host-Reload ist players
+// leer, aber unser Socket lebt noch — dann kommt host-ready vom Server).
+function tryRejoinGame() {
   const charId = (myCharacter && myCharacter.id) || loadSavedCharId();
   if (!charId) return;
   const c = CHARACTERS.find(x => x.id === charId);
   if (!c) return;
   socket.emit('join-game', { name: c.name.toUpperCase(), characterId: c.id });
-});
+}
+
+socket.on('connect', tryRejoinGame);
+
+socket.on('host-ready', tryRejoinGame);
 
 socket.on('disconnect', () => {
   toast('Verbindung verloren …', 4000);
@@ -255,16 +257,51 @@ document.addEventListener('click', keepAwake, { once: true });
 // =====================================================
 //  VOLLBILD — fixt das abgeschnittene Gamepad in iOS Safari
 // =====================================================
+
+// iPhone Safari unterstützt die Fullscreen-API NICHT (Stand 2026).
+// Auf dem iPad gibt's webkitRequestFullscreen ab iPadOS 13, auf dem
+// iPhone ist beides undefined → Button wirkt kaputt.
+function fullscreenSupported() {
+  const el = document.documentElement;
+  return !!(el.requestFullscreen || el.webkitRequestFullscreen);
+}
+
+function isIos() {
+  const ua = navigator.userAgent || '';
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  // iPadOS 13+ meldet sich als "MacIntel" mit Touch
+  return navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+}
+
+function isIphone() {
+  return /iPhone|iPod/.test(navigator.userAgent || '');
+}
+
+function isStandalone() {
+  return window.navigator.standalone === true ||
+    (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+}
+
 async function enterFullscreen() {
+  // iPhone-Fallback: API existiert nicht → User muss "Zum Home-Bildschirm".
+  if (!fullscreenSupported()) {
+    if (isIos()) {
+      showIosHomescreenHint();
+    } else {
+      toast('Vollbild wird auf diesem Gerät nicht unterstützt.', 3000);
+    }
+    return;
+  }
   const el = document.documentElement;
   try {
     if (el.requestFullscreen) {
       await el.requestFullscreen({ navigationUI: 'hide' });
     } else if (el.webkitRequestFullscreen) {
-      // iOS Safari (älter)
       el.webkitRequestFullscreen();
     }
-  } catch (e) { /* user gesture nötig oder nicht unterstützt */ }
+  } catch (e) {
+    toast('Vollbild blockiert. Tippe nochmal auf den Button.', 2500);
+  }
   // Querformat versuchen — auf iOS oft nicht erlaubt, ist aber ein
   // No-op-Fallback und bricht nichts
   try {
@@ -279,15 +316,51 @@ function isFullscreen() {
 }
 
 function syncFullscreenClass() {
-  document.body.classList.toggle('is-fullscreen', isFullscreen());
+  document.body.classList.toggle(
+    'is-fullscreen',
+    isFullscreen() || isStandalone()
+  );
 }
 
 document.addEventListener('fullscreenchange', syncFullscreenClass);
 document.addEventListener('webkitfullscreenchange', syncFullscreenClass);
 
+// iOS-Hinweis-Overlay: erklärt einmalig "Teilen → Zum Home-Bildschirm".
+// Wird lazy gebaut, damit Nicht-iOS-User nichts davon sehen.
+function showIosHomescreenHint() {
+  let overlay = document.getElementById('ios-fs-hint');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'ios-fs-hint';
+    overlay.innerHTML = `
+      <div class="ios-fs-hint__card">
+        <h2>Echter Vollbild auf dem iPhone</h2>
+        <p>Safari erlaubt keinen Vollbild-Modus auf Knopfdruck.</p>
+        <ol>
+          <li>Tippe unten auf <strong>Teilen</strong>
+            <span aria-hidden="true">▵</span></li>
+          <li>Wähle <strong>"Zum Home-Bildschirm"</strong></li>
+          <li>Öffne MÄNNERTAG vom Home-Bildschirm
+            — startet ohne Adresszeile.</li>
+        </ol>
+        <button type="button" class="ios-fs-hint__close">VERSTANDEN</button>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    const close = () => overlay.classList.remove('show');
+    overlay.querySelector('.ios-fs-hint__close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+  }
+  overlay.classList.add('show');
+}
+
 function maybeAutoFullscreen() {
   // Auto-Vollbild geht nur als direkte Reaktion auf einen User-Tap.
-  // Wir versuchen es opportunistisch beim nächsten Tap auf einen Pad-Button.
+  // Auf iPhone-Safari sinnlos (API fehlt) → gar nicht erst versuchen,
+  // damit wir nicht beim ersten Tap stumm scheitern.
+  if (!fullscreenSupported() || isStandalone()) return;
   const oneShot = () => {
     enterFullscreen();
     document.removeEventListener('touchstart', oneShot, true);
@@ -299,5 +372,23 @@ function maybeAutoFullscreen() {
 
 const fsBtn = document.getElementById('fs-btn');
 if (fsBtn) {
-  fsBtn.addEventListener('click', enterFullscreen);
+  // touchend feuert auf iOS zuverlässig & ohne 300ms-Delay; click bleibt
+  // für Desktop. Flag verhindert Doppel-Trigger, wenn beides feuert.
+  let lastFsTrigger = 0;
+  const trigger = (e) => {
+    const now = Date.now();
+    if (now - lastFsTrigger < 500) return;
+    lastFsTrigger = now;
+    if (e.cancelable) e.preventDefault();
+    enterFullscreen();
+  };
+  fsBtn.addEventListener('touchend', trigger, { passive: false });
+  fsBtn.addEventListener('click', trigger);
+  // Standalone-Modus: kein Button nötig, läuft schon ohne URL-Bar.
+  if (isStandalone()) {
+    fsBtn.style.display = 'none';
+  } else if (isIphone()) {
+    fsBtn.title = 'iPhone: Zum Home-Bildschirm hinzufügen';
+  }
 }
+syncFullscreenClass();

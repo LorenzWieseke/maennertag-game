@@ -73,9 +73,12 @@ body {
   top: calc(env(safe-area-inset-top) + 0.5rem);
   right: calc(env(safe-area-inset-right) + 0.5rem);
   z-index: 2000;
-  padding: 0.45rem 0.8rem;
+  /* großzügigere Tap-Fläche — iOS verschluckt sonst gerne Taps auf
+     kleine fixed-Buttons direkt unter der Adressleiste */
+  min-height: 44px;
+  padding: 0.6rem 0.9rem;
   font-family: 'Bungee', sans-serif;
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   letter-spacing: 0.1em;
   background: var(--beer);
   color: var(--ink);
@@ -83,12 +86,84 @@ body {
   cursor: pointer;
   box-shadow: 3px 3px 0 var(--wood-deep);
   transition: transform 0.05s, opacity 0.2s;
+  /* Touch muss durchkommen, sonst frisst body { touch-action: none } den Tap */
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 #fs-btn:active {
   transform: translate(2px, 2px);
   box-shadow: 1px 1px 0 var(--wood-deep);
 }
 body.is-fullscreen #fs-btn { display: none; }
+
+/* === iOS Vollbild-Hinweis-Overlay ===
+   Wird angezeigt, wenn der User auf iPhone den Vollbild-Button tippt —
+   da iPhone-Safari die Fullscreen-API nicht unterstützt, erklären wir
+   stattdessen den "Zum Home-Bildschirm"-Trick. */
+#ios-fs-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(26, 15, 8, 0.92);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+#ios-fs-hint.show { display: flex; }
+.ios-fs-hint__card {
+  max-width: 22rem;
+  width: 100%;
+  background: var(--wood-deep);
+  border: 4px solid var(--beer);
+  box-shadow: 6px 6px 0 #000;
+  padding: 1.25rem 1.25rem 1rem;
+  color: var(--foam);
+  font-family: 'Special Elite', monospace;
+}
+.ios-fs-hint__card h2 {
+  font-family: 'Bungee', sans-serif;
+  font-size: 1.1rem;
+  color: var(--beer);
+  letter-spacing: 0.08em;
+  margin-bottom: 0.6rem;
+  line-height: 1.15;
+}
+.ios-fs-hint__card p {
+  font-size: 0.85rem;
+  opacity: 0.85;
+  margin-bottom: 0.75rem;
+}
+.ios-fs-hint__card ol {
+  list-style: decimal inside;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  margin-bottom: 1rem;
+  padding-left: 0.25rem;
+}
+.ios-fs-hint__card ol li { margin-bottom: 0.35rem; }
+.ios-fs-hint__card ol strong { color: var(--beer); }
+.ios-fs-hint__close {
+  width: 100%;
+  padding: 0.85rem;
+  font-family: 'Bungee', sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.15em;
+  background: var(--beer);
+  color: var(--ink);
+  border: none;
+  border-bottom: 5px solid var(--wood);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.ios-fs-hint__close:active {
+  transform: translateY(2px);
+  border-bottom-width: 3px;
+}
 
 .step-header {
   text-align: center;
