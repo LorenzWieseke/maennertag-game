@@ -1022,9 +1022,9 @@ class HikeScene extends Phaser.Scene {
     this.obstacles = this.physics.add.staticGroup();
     const isNearBrewery = (x) => this.breweries.some(b => Math.abs(b.x - x) < 130);
     const isNearGoal = (x) => Math.abs(x - this.goalX) < 220;
-    // Spawn-Schutzzone: keine Hindernisse in der ersten 600 px (Spieler
+    // Spawn-Schutzzone: keine Hindernisse in der ersten 500 px (Spieler
     // spawnt bei x=150-360, soll nicht sofort drin stehen)
-    const SPAWN_GUARD_X = 600;
+    const SPAWN_GUARD_X = 500;
     // Mindestabstand zwischen zwei Hindernissen — wir tracken die belegten
     // X-Positionen pro Plattform und werfen Kandidaten zu nah dran weg.
     const MIN_GAP = 110;
@@ -1056,9 +1056,10 @@ class HikeScene extends Phaser.Scene {
       const w = p.end - p.start;
       if (w < 240) return;
 
-      // Steine — flache „große“ Slots (stone-low) statt hoher stone-big: besser
-      // überspringbar, weniger Sichtblock für rollende Steine.
-      const numStones = Math.max(1, Math.min(3, Math.floor(w / 360)));
+      // Steine — biom-abhängig: Wiese spärlicher (max 1), Felsen dicht (density 240).
+      const stoneDensity = { 0: 360, 1: 320, 2: 240 }[p.biome] ?? 320;
+      const maxByBiome = { 0: 1, 1: 3, 2: 3 }[p.biome] ?? 3;
+      const numStones = Math.max(0, Math.min(maxByBiome, Math.floor(w / stoneDensity)));
       for (let i = 0; i < numStones; i++) {
         const x = tryPlace(idx, p, w, 80);
         if (x === null) continue;
@@ -1072,13 +1073,18 @@ class HikeScene extends Phaser.Scene {
         stone.isLowRock = useLow;
       }
 
-      // Baumstämme nur im Wald, max 1 pro Plattform
-      if (p.biome === 1) {
-        const x = tryPlace(idx, p, w, 80);
-        if (x !== null) {
+      // Baumstämme: Wiese (häufiger) + Wald (dichter), überspringbar, keine Stamina-Strafe
+      if (p.biome === 0 || p.biome === 1) {
+        const trunkChance = p.biome === 1 ? 0.55 : 0.45;
+        const maxTrunks = p.biome === 1 ? 2 : 1;
+        for (let t = 0; t < maxTrunks; t++) {
+          if (Math.random() > trunkChance) break;
+          const x = tryPlace(idx, p, w, 80);
+          if (x === null) break;
           const trunk = this.obstacles.create(x, p.topY - 14, 'tree-trunk');
           trunk.body.setSize(80, 22);
           trunk.body.updateFromGameObject();
+          trunk.isTrunk = true;
         }
       }
     });
@@ -1126,9 +1132,20 @@ class HikeScene extends Phaser.Scene {
       tramp.refreshBody();
       tramp.setData('floatTargetX', floatMid);
 
-      // Schweb-Plattformen: Startsegment + Ketten-Segmente = begehbarer Luft-Pfad
-      const platY = Math.max(80, ty - 208);
-      const platW = 130;
+      // Pulsierender Glow am Pilz — auffällige Aura damit er als Sprung-Ziel erkannt wird
+      const glow = this.add.circle(trampX, ty - 14, 32, 0xfff3a0, 0.35).setDepth(-1);
+      this.tweens.add({
+        targets: glow, scale: 1.25, alpha: 0.15,
+        yoyo: true, duration: 800, repeat: -1, ease: 'Sine.inOut'
+      });
+      this.tweens.add({
+        targets: tramp, scaleY: 1.05, yoyo: true,
+        duration: 800, repeat: -1, ease: 'Sine.inOut'
+      });
+
+      // Schweb-Plattformen: 6 Inseln gleichmäßig über die gesamte Sektionsbreite
+      // → alternativer Weg oben, erreichbar per Trampolin
+      const platY = Math.max(80, ty - 220);
       const addFloatPlat = (cx, cy, w) => {
         const fp = this.add.rectangle(cx, cy, w, 14, 0x6b3520).setOrigin(0.5);
         fp.setStrokeStyle(2, 0x3d1a06);
@@ -1139,34 +1156,38 @@ class HikeScene extends Phaser.Scene {
         }
         return fp;
       };
-      addFloatPlat(floatMid, platY, platW);
-      for (let k = -1; k <= 1; k++) {
-        this.spawnBeer(floatMid + k * 32, platY - 28);
-      }
-      const edgeL = highest.start + 55;
-      const edgeR = highest.end - 55;
-      const chainSteps = [140, -140, 135];
-      let cx = floatMid;
-      for (let ci = 0; ci < chainSteps.length; ci++) {
-        cx = Phaser.Math.Clamp(cx + chainSteps[ci], edgeL, edgeR);
-        const w = ci === 1 ? 100 : 115;
-        addFloatPlat(cx, platY, w);
-        if (ci === 0) this.spawnBeer(cx, platY - 28);
-        if (ci === 2 && Math.random() < 0.55) this.spawnBeer(cx - 20, platY - 28);
-        if (ci === 1 && Math.random() < 0.45) {
+      const NUM_FLOATS = 6;
+      const FLOAT_W = 85;
+      const sectStart = this.sectStarts[sectIdx];
+      const sectEnd   = this.sectEnds[sectIdx];
+      const sectionUsable = sectEnd - sectStart - 120; // 60 px Buffer je Seite
+      const gapBetween = (sectionUsable - NUM_FLOATS * FLOAT_W) / (NUM_FLOATS - 1);
+      // Nächste Platform zum Trampolin als Sprung-Ziel merken
+      let nearestDist = Infinity;
+      let nearestX = floatMid;
+      for (let fi = 0; fi < NUM_FLOATS; fi++) {
+        const cx = sectStart + 60 + fi * (FLOAT_W + gapBetween) + FLOAT_W / 2;
+        addFloatPlat(cx, platY, FLOAT_W);
+        if (Math.abs(cx - trampX) < nearestDist) {
+          nearestDist = Math.abs(cx - trampX);
+          nearestX = cx;
+        }
+        // Bier auf erster, letzter und Mitte-Platform; sonst 50 % Chance
+        if (fi === 0 || fi === NUM_FLOATS - 1 || fi === Math.floor(NUM_FLOATS / 2)) {
+          this.spawnBeer(cx, platY - 28);
+        } else if (Math.random() < 0.5) {
+          this.spawnBeer(cx, platY - 28);
+        }
+        // Psy-Pilz auf einer der mittleren Platforms
+        if (fi === Math.floor(NUM_FLOATS / 2) - 1 && Math.random() < 0.65) {
           const m = this.psycheMushrooms.create(cx, platY - 7, 'mushroom-psy');
           m.setOrigin(0.5, 1);
           m.body.setSize(20, 14).setOffset(6, 14);
           m.refreshBody();
-        } else if (ci === 1 && Math.random() < 0.4) {
-          this.spawnBeer(cx + 8, platY - 28);
         }
       }
-      // Pulsierender Glow am Pilz, damit er als Ziel auffällt
-      this.tweens.add({
-        targets: tramp, scaleY: 1.05, yoyo: true,
-        duration: 800, repeat: -1, ease: 'Sine.inOut'
-      });
+      // Trampolin-Ziel auf nächste Platform korrigieren (ersetzt floatMid von oben)
+      tramp.setData('floatTargetX', nearestX);
     }
 
     // --- Psychedelic-Sammelpilze (Wald): wenige, mit Mindestabstand ---
@@ -1205,7 +1226,7 @@ class HikeScene extends Phaser.Scene {
       const w = p.end - p.start;
       if (w < 200) return false;
       const cx = (p.start + p.end) / 2;
-      if (cx < 680 || enemyNearBrewery(cx)) return false;
+      if (cx < 500 || enemyNearBrewery(cx)) return false;
       const x = p.start + 40 + Math.random() * (w - 80);
       if (enemyNearBrewery(x)) return false;
       const y = p.topY;
@@ -1216,36 +1237,69 @@ class HikeScene extends Phaser.Scene {
         e.body.setSize(34, 34);
         e.body.setOffset(7, 8);
       } else {
+        e.setScale(1.25);
         e.body.setSize(28, 44);
         e.body.setOffset(6, 6);
       }
-      e.body.setVelocityX(speed * (Math.random() < 0.5 ? 1 : -1));
       e.body.setBounce(0, 0);
+      e.patrolDir = Math.random() < 0.5 ? 1 : -1;
       e.patrolMin = p.start + 24;
       e.patrolMax = p.end - 24;
       e.patrolSpeed = speed;
       e.enemyTex = texKey;
       this.physics.add.collider(e, this.ground);
       this.hikeEnemies.add(e);
+      const bobBase = e.scaleY;
+      this.tweens.add({
+        targets: e,
+        scaleY: bobBase * 1.04,
+        yoyo: true,
+        duration: 600,
+        repeat: -1,
+        ease: 'Sine.inOut'
+      });
       return true;
     };
+    // Eichhörnchen: max 6, Mindestabstand 700 px, ~45 % Chance pro Plateau
     let sq = 0;
+    const placedSqX = [];
+    const SQ_MIN_DIST = 700;
     for (const p of this.terrain) {
-      if (p.biome !== 1 || sq >= 12) continue;
-      if (Math.random() > 0.38) continue;
-      if (spawnPatrolEnemy(p, 'enemy-squirrel', 120 + Math.random() * 40)) sq++;
+      if (p.biome !== 1 || sq >= 6) continue;
+      if (Math.random() > 0.55) continue;
+      const sqCx = (p.start + p.end) / 2;
+      if (placedSqX.some(px => Math.abs(px - sqCx) < SQ_MIN_DIST)) continue;
+      if (spawnPatrolEnemy(p, 'enemy-squirrel', 120 + Math.random() * 40)) {
+        sq++;
+        placedSqX.push(sqCx);
+      }
     }
+    // Wiese-Nazis: max 3, ~35 % Chance, Mindestabstand 700 px
+    const PATROL_MIN_DIST = 700;
     let pr = 0;
+    const placedPrX = [];
     for (const p of this.terrain) {
-      if (p.biome !== 0 || pr >= 9) continue;
-      if (Math.random() > 0.8) continue;
-      if (spawnPatrolEnemy(p, 'enemy-patrol', 70 + Math.random() * 30)) pr++;
+      if (p.biome !== 0 || pr >= 3) continue;
+      if (Math.random() > 0.65) continue;
+      const prCx = (p.start + p.end) / 2;
+      if (placedPrX.some(px => Math.abs(px - prCx) < PATROL_MIN_DIST)) continue;
+      if (spawnPatrolEnemy(p, 'enemy-patrol', 70 + Math.random() * 30)) {
+        pr++;
+        placedPrX.push(prCx);
+      }
     }
+    // Gipfel-Nazis: max 3, ~40 % Chance, Mindestabstand 700 px
     let pk = 0;
+    const placedPkX = [];
     for (const p of this.terrain) {
-      if (p.biome !== 2 || pk >= 4) continue;
-      if (Math.random() > 0.85) continue;
-      if (spawnPatrolEnemy(p, 'enemy-patrol', 65 + Math.random() * 25)) pk++;
+      if (p.biome !== 2 || pk >= 3) continue;
+      if (Math.random() > 0.60) continue;
+      const pkCx = (p.start + p.end) / 2;
+      if (placedPkX.some(px => Math.abs(px - pkCx) < PATROL_MIN_DIST)) continue;
+      if (spawnPatrolEnemy(p, 'enemy-patrol', 65 + Math.random() * 25)) {
+        pk++;
+        placedPkX.push(pkCx);
+      }
     }
 
     // --- Rolling-Stones: Gruppe sofort, Spawner-Timer erst nach Mission-Banner-Dismiss
@@ -1321,30 +1375,97 @@ class HikeScene extends Phaser.Scene {
 
   showMissionBanner() {
     const W = this.scale.width, H = this.scale.height;
-    const overlay = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.78)
+    const allObjs = [];
+
+    const overlay = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.82)
       .setScrollFactor(0).setDepth(2500);
-    const t1 = this.add.text(W / 2, H * 0.18, '🥾  BRAUEREI-WANDERUNG', {
-      fontFamily: 'Bungee, sans-serif', fontSize: '60px', color: '#f4c842',
+    allObjs.push(overlay);
+
+    // Titel
+    const t1 = this.add.text(W / 2, H * 0.11, '🥾  BRAUEREI-WANDERUNG', {
+      fontFamily: 'Bungee, sans-serif', fontSize: '56px', color: '#f4c842',
       stroke: '#3d1a06', strokeThickness: 10
     }).setOrigin(0.5).setScrollFactor(0).setDepth(2501);
+    allObjs.push(t1);
 
-    const t2 = this.add.text(W / 2, H * 0.40,
-      'ZIEL: Kommt gemeinsam bis zur 🚩 Flagge ans Ende.\n\n' +
-      'Liegt jemand K.O.: Ein Mitspieler muss ihm Bier geben\n' +
-      '(nah dran TRINKEN drücken), damit er wieder aufsteht.\n\n' +
-      'Vom Hügel rollende Steine legen euch mit einem Treffer K.O. —\n' +
-      'Lawinen-Steine tun das nicht, treffen aber trotzdem hart.',
-      {
-        fontFamily: 'Special Elite, monospace', fontSize: '22px',
-        color: '#fef3d4', align: 'center', lineSpacing: 8
+    // Regeln — je eine Icon-Zeile
+    const rules = [
+      { icon: '🚩', text: 'Gemeinsam zur Flagge — erst wenn alle da sind, ist gewonnen' },
+      { icon: '🍺', text: 'K.O.? Mitspieler nah dran → TRINKEN drücken zum Aufwecken' },
+      { icon: '🪨', text: 'Rollende Steine legen euch mit einem Treffer K.O.' },
+    ];
+    let ry = H * 0.25;
+    for (const r of rules) {
+      const rt = this.add.text(W / 2, ry, r.icon + '  ' + r.text, {
+        fontFamily: 'Special Elite, monospace', fontSize: '20px',
+        color: '#fef3d4', align: 'center', stroke: '#000', strokeThickness: 2
       }).setOrigin(0.5).setScrollFactor(0).setDepth(2501);
+      allObjs.push(rt);
+      ry += 36;
+    }
 
-    const t3 = this.add.text(W / 2, H * 0.88,
+    // Trennlinie + Specials-Überschrift
+    const divLine = this.add.rectangle(W / 2, H * 0.43, W * 0.65, 2, 0xf4c842, 0.55)
+      .setScrollFactor(0).setDepth(2501);
+    allObjs.push(divLine);
+
+    const specHeader = this.add.text(W / 2, H * 0.47, '★  EURE SPECIALS  (★-TASTE)', {
+      fontFamily: 'Bungee, sans-serif', fontSize: '18px', color: '#f4c842',
+      stroke: '#000', strokeThickness: 4
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2501);
+    allObjs.push(specHeader);
+
+    // Pro Spieler eine Zeile: Sprite · Name · ★ Special · — Beschreibung
+    const players = Array.from(this.players.values());
+    const rowH = 36;
+    let py = H * 0.52;
+    for (const p of players) {
+      const info = HikePlayer.ABILITY_INFO[p.charData.id];
+      if (!info) { py += rowH; continue; }
+      const colorHex = '#' + p.charData.color.toString(16).padStart(6, '0');
+
+      // Charakter-Sprite-Thumbnail (bereits als Phaser-Textur geladen)
+      const texKey = 'char-' + p.charData.id;
+      if (this.textures.exists(texKey)) {
+        const spr = this.add.image(W * 0.20, py, texKey)
+          .setScale(0.28).setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(2501);
+        allObjs.push(spr);
+      }
+
+      // Spielername (farbig, rechtsbündig zur Mittelspalte)
+      const nameT = this.add.text(W * 0.285, py,
+        p.playerName.toUpperCase(), {
+          fontFamily: 'Bungee, sans-serif', fontSize: '17px', color: colorHex,
+          stroke: '#000', strokeThickness: 3
+        }).setOrigin(1, 0.5).setScrollFactor(0).setDepth(2501);
+      allObjs.push(nameT);
+
+      // Special-Name (gold)
+      const specT = this.add.text(W * 0.30, py,
+        '★ ' + info.name, {
+          fontFamily: 'Bungee, sans-serif', fontSize: '17px', color: '#f4c842',
+          stroke: '#000', strokeThickness: 3
+        }).setOrigin(0, 0.5).setScrollFactor(0).setDepth(2501);
+      allObjs.push(specT);
+
+      // Special-Beschreibung (hellgrau, direkt rechts neben dem Namen)
+      const descT = this.add.text(W * 0.30 + specT.width + 12, py,
+        '— ' + info.desc, {
+          fontFamily: 'Special Elite, monospace', fontSize: '15px', color: '#c0b898',
+          stroke: '#000', strokeThickness: 2
+        }).setOrigin(0, 0.5).setScrollFactor(0).setDepth(2501);
+      allObjs.push(descT);
+
+      py += rowH;
+    }
+
+    // Start-Hinweis (pulsierend)
+    const t3 = this.add.text(W / 2, H * 0.91,
       '▶  DRÜCKE  ★ SPECIAL  ZUM STARTEN  ◀', {
         fontFamily: 'Bungee, sans-serif', fontSize: '24px',
         color: '#6dbf47', stroke: '#000', strokeThickness: 4
       }).setOrigin(0.5).setScrollFactor(0).setDepth(2501);
-    // Pulsierende Aufmerksamkeit auf den Start-Hinweis
+    allObjs.push(t3);
     this.tweens.add({
       targets: t3, scale: 1.08, yoyo: true,
       duration: 600, repeat: -1, ease: 'Sine.inOut'
@@ -1355,9 +1476,9 @@ class HikeScene extends Phaser.Scene {
       for (const p of this.players.values()) p.actionLatch = true;
       this.tweens.killTweensOf(t3);
       this.tweens.add({
-        targets: [overlay, t1, t2, t3], alpha: 0, duration: 400,
+        targets: allObjs, alpha: 0, duration: 400,
         onComplete: () => {
-          overlay.destroy(); t1.destroy(); t2.destroy(); t3.destroy();
+          allObjs.forEach(o => o.destroy());
           this.startRollingStoneSpawners();
         }
       });
@@ -1383,16 +1504,18 @@ class HikeScene extends Phaser.Scene {
     // Plateaus gleichzeitig feuern. Steine spawnen sowieso nur, wenn
     // ein Spieler in <1100 px der Plattform ist (siehe spawnRollingStone).
     this.breweries.forEach((b, idx) => {
-      if (!b.plateau || b.plateau.topY >= GROUND_Y - 50) return;
-      const firstDelay = 5500 + idx * 1800 + Math.random() * 1500;
+      if (!b.plateau) return;
+      const isMeadow = b.plateau.sectionIndex === 0;
+      // Wiese: sanfterer Einstieg (9 s Wartezeit, alle 7–9 s ein Stein, kein Doppelschuss)
+      const firstDelay = (isMeadow ? 9000 : 5500) + idx * 1800 + Math.random() * 1500;
       this.time.delayedCall(firstDelay, () => {
         this.spawnRollingStone(b.plateau);
         this.time.addEvent({
-          delay: 4200 + Math.random() * 2200,
+          delay: (isMeadow ? 7000 : 4200) + Math.random() * 2200,
           loop: true,
           callback: () => {
             this.spawnRollingStone(b.plateau);
-            if (Math.random() < 0.3) {
+            if (!isMeadow && Math.random() < 0.3) {
               this.time.delayedCall(650 + Math.random() * 250, () => {
                 if (!this.gameWon && !this.gameLost) {
                   this.spawnRollingStone(b.plateau);
@@ -1403,15 +1526,14 @@ class HikeScene extends Phaser.Scene {
         });
       });
     });
-    // Geröll-Lawine in Akt 3 (Felsgipfel: Sektion 3 + 4) — nur aktiv wenn
-    // ein Spieler tatsächlich oben angekommen ist (siehe spawnAvalancheRock)
+    // Geröll-Lawine in Akt 3 (Felsgipfel: Sektion 3 + 4) — schnellere Frequenz
     for (const i of [3, 4]) {
       if (this.sectStarts[i] === undefined) continue;
-      const firstDelay = 12000 + Math.random() * 4000;
+      const firstDelay = 8000 + Math.random() * 3000;
       this.time.delayedCall(firstDelay, () => {
         this.spawnAvalancheRock(i);
         this.time.addEvent({
-          delay: 9000 + Math.random() * 4000,
+          delay: 6500 + Math.random() * 3000,
           loop: true,
           callback: () => this.spawnAvalancheRock(i)
         });
@@ -1506,7 +1628,17 @@ class HikeScene extends Phaser.Scene {
       beer.destroy();
       player.pickupBeer();
     });
-    this.physics.add.collider(player.sprite, this.obstacles, () => {
+    this.physics.add.collider(player.sprite, this.obstacles, (sp, obstacle) => {
+      if (obstacle && obstacle.isTrunk) {
+        if (sp.body.touching.left || sp.body.touching.right) {
+          const now = this.time.now;
+          if (player._lastTrunkHint == null || now - player._lastTrunkHint > 1000) {
+            player._lastTrunkHint = now;
+            player.popText('🪵 SPRUNG!', '#9adb6a');
+          }
+        }
+        return;
+      }
       player.hitObstacle();
     });
     if (this.rollingStones) {
@@ -1868,10 +2000,15 @@ class HikeScene extends Phaser.Scene {
         if (!e || !e.active || !e.body) return;
         if (e.patrolMin != null && e.patrolMax != null) {
           const spd = e.patrolSpeed != null ? e.patrolSpeed : Math.max(60, Math.abs(e.body.velocity.x) || 80);
-          if (e.x < e.patrolMin) e.body.setVelocityX(spd);
-          else if (e.x > e.patrolMax) e.body.setVelocityX(-spd);
+          if (e.patrolDir == null) e.patrolDir = e.body.velocity.x >= 0 ? 1 : -1;
+          if (e.x < e.patrolMin) e.patrolDir = 1;
+          else if (e.x > e.patrolMax) e.patrolDir = -1;
+          if (e.body.blocked.left) e.patrolDir = 1;
+          if (e.body.blocked.right) e.patrolDir = -1;
+          e.body.setVelocityX(spd * e.patrolDir);
         }
-        e.setFlipX(e.body.velocity.x < 0);
+        if (e.patrolDir != null) e.setFlipX(e.patrolDir < 0);
+        else e.setFlipX(e.body.velocity.x < 0);
         if (e.x < camL - 450) e.destroy();
       });
     }
@@ -2824,19 +2961,122 @@ class LevelSelectScene extends Phaser.Scene {
 // ================================================================
 //  PADDLE-SCENE — Top-Down-Fluss
 // ================================================================
-//  Steuerung (Handy: ◀▲, ▲ = Controller „Sprung“, ★ = Special):
-//   - left/right     → laterale Bewegung
-//   - up             → Paddel-Boost (Stamina-Kosten)
-//   - drink          → (optional) — Bier per Berührung
-//   - action         → Spezialfähigkeit
+//  Steuerung (Handy-Controller):
+//   - left/right     → seitlich steuern
+//   - action (★)     → NITRO verbrauchen (Bier lädt auf)
+//   - Krokodile      → Berührung = eliminiert
 //
 //  Welt-Y nimmt nach oben ab (stromaufwärts = negative Y). Die Strömung
 //  zieht alle Boote stromaufwärts (negative vy). Ziel-Linie liegt bei
 //  kleinem Y (weit oben in der Welt). Hindernisse: Felsen, Treibholz.
 //  Wettkampf: wer zuerst die Ziellinie passiert, gewinnt (Rangliste).
+//  Todeszonen: Berührung = sofort ausgeschieden.
 // ================================================================
 class PaddleScene extends Phaser.Scene {
   constructor() { super('PaddleScene'); }
+
+  spawnPaddleObstacle(ox, oy) {
+    const addStatic = (go) => {
+      this.physics.add.existing(go, true);
+      if (go.body && go.body.refreshBody) go.body.refreshBody();
+      this.obstacles.add(go);
+    };
+    const r = Math.random();
+    if (r < 0.35) {
+      // kleiner Fels
+      const obj = this.add.ellipse(ox, oy, 50 + Math.random() * 20, 36 + Math.random() * 14, 0x6b6b6b);
+      obj.setStrokeStyle(3, 0x3d3d3d);
+      addStatic(obj);
+    } else if (r < 0.6) {
+      // großer Fels
+      const obj = this.add.ellipse(ox, oy, 75 + Math.random() * 30, 50 + Math.random() * 20, 0x555555);
+      obj.setStrokeStyle(4, 0x2a2a2a);
+      addStatic(obj);
+    } else if (r < 0.8) {
+      // kurzes Treibholz
+      const obj = this.add.rectangle(ox, oy, 55 + Math.random() * 30, 16 + Math.random() * 6, 0x6b4a2a);
+      obj.setStrokeStyle(2, 0x3d2a1a);
+      obj.setRotation((Math.random() - 0.5) * 0.5);
+      addStatic(obj);
+    } else {
+      // langes Treibholz
+      const obj = this.add.rectangle(ox, oy, 100 + Math.random() * 40, 18 + Math.random() * 6, 0x5a3a1a);
+      obj.setStrokeStyle(2, 0x2d1a0a);
+      obj.setRotation((Math.random() - 0.5) * 0.4);
+      addStatic(obj);
+    }
+  }
+
+  spawnDeadlyZones(W, SHORE_W, RIVER_LENGTH, goalY) {
+    this.deadlyZones = this.add.group();
+    const riverInnerL = SHORE_W + 60;
+    const riverInnerR = W - SHORE_W - 60;
+    const count = Math.max(5, Math.floor(RIVER_LENGTH / 800));
+    for (let i = 0; i < count; i++) {
+      const ox = riverInnerL + Math.random() * (riverInnerR - riverInnerL);
+      let oy;
+      let guard = 0;
+      do {
+        oy = -500 - Math.random() * (RIVER_LENGTH - 900);
+        guard++;
+      } while (oy < goalY + 300 && guard < 16);
+
+      const croc = this.add.container(ox, oy);
+      const flip = Math.random() < 0.5 ? 1 : -1;
+      croc.setScale(flip, 1);
+
+      // Schwanz (hinten)
+      croc.add(this.add.triangle(-46, 0, 0, -14, -26, 0, 0, 14, 0x2d5a38));
+      // Rumpf: längliche Form
+      croc.add(this.add.ellipse(-12, 1, 72, 34, 0x3d7a4a));
+      croc.add(this.add.ellipse(-10, 1, 58, 26, 0x4a9060));
+      // Rücken-Streifen
+      croc.add(this.add.ellipse(-22, -10, 22, 6, 0x2a4a32, 0.75));
+      croc.add(this.add.ellipse(-6, -11, 24, 6, 0x2a4a32, 0.75));
+      croc.add(this.add.ellipse(10, -10, 20, 5, 0x2a4a32, 0.75));
+      // Kopf
+      croc.add(this.add.ellipse(34, 0, 36, 28, 0x458a58));
+      croc.add(this.add.ellipse(38, 2, 22, 18, 0x3a7a4a));
+      // Schnauze
+      croc.add(this.add.triangle(54, 0, 0, -9, 30, 0, 0, 9, 0x356648));
+      // Zähne (kleine weiße Dreiecke entlang der Schnauze)
+      for (let z = 0; z < 4; z++) {
+        const zx = 48 + z * 6;
+        croc.add(this.add.triangle(zx, -4, 0, 0, 0, 5, 3, 0, 0xf5f0e6));
+      }
+      // Beine (kurz, von oben)
+      croc.add(this.add.ellipse(-4, 16, 10, 8, 0x356040));
+      croc.add(this.add.ellipse(14, 15, 10, 8, 0x356040));
+      croc.add(this.add.ellipse(28, 14, 9, 7, 0x356040));
+      // Augen (oben auf dem Kopf — klar lesbar von oben)
+      croc.add(this.add.circle(28, -12, 5, 0xfff8dc));
+      croc.add(this.add.circle(28, 12, 5, 0xfff8dc));
+      croc.add(this.add.circle(30, -12, 2.2, 0x1a1a1a));
+      croc.add(this.add.circle(30, 12, 2.2, 0x1a1a1a));
+      croc.add(this.add.circle(31, -11.5, 1.2, 0xffffff));
+      croc.add(this.add.circle(31, 12.5, 1.2, 0xffffff));
+
+      croc.setSize(100, 42);
+      this.physics.add.existing(croc, true);
+      if (croc.body && croc.body.refreshBody) croc.body.refreshBody();
+      this.deadlyZones.add(croc);
+
+      this.tweens.add({
+        targets: croc,
+        y: oy + 5,
+        yoyo: true,
+        duration: 2000 + Math.random() * 1000,
+        repeat: -1,
+        ease: 'Sine.inOut'
+      });
+    }
+  }
+
+  onPlayerEliminated(p) {
+    if (!this.eliminationOrder) this.eliminationOrder = [];
+    if (this.eliminationOrder.includes(p)) return;
+    this.eliminationOrder.push(p);
+  }
 
   preload() {
     if (window.MaennertagPixelChars) {
@@ -2887,18 +3127,7 @@ class PaddleScene extends Phaser.Scene {
         ox = SHORE_W + 40 + Math.random() * (riverW - 80);
       }
       const oy = -200 - Math.random() * (RIVER_LENGTH - 400);
-      const isLog = Math.random() < 0.4;
-      let obj;
-      if (isLog) {
-        obj = this.add.rectangle(ox, oy, 90, 22, 0x6b4a2a);
-        obj.setStrokeStyle(2, 0x3d2a1a);
-      } else {
-        obj = this.add.ellipse(ox, oy, 60, 44, 0x6b6b6b);
-        obj.setStrokeStyle(3, 0x3d3d3d);
-      }
-      this.physics.add.existing(obj, true);
-      if (obj.body && obj.body.refreshBody) obj.body.refreshBody();
-      this.obstacles.add(obj);
+      this.spawnPaddleObstacle(ox, oy);
     }
 
     // Bier-Flaschen die im Wasser treiben (statisch; Position per Tween → Body in update nachziehen)
@@ -2915,6 +3144,8 @@ class PaddleScene extends Phaser.Scene {
     this.goalY = goalY;
     this.gameWon = false;
     this.finishOrder = []; // Reihenfolge beim Ziel — Wettkampf
+    this.eliminationOrder = []; // chronologisch: zuerst raus = schlechteste DNF
+    this.spawnDeadlyZones(W, SHORE_W, RIVER_LENGTH, goalY);
     this.add.rectangle(W / 2, goalY, W - 2 * SHORE_W, 8, 0xc94f4f);
     this.add.text(W / 2, goalY - 30, 'ZIEL — BIERGARTEN', {
       fontFamily: 'Bungee, sans-serif', fontSize: '22px',
@@ -2954,7 +3185,7 @@ class PaddleScene extends Phaser.Scene {
     this.buildHUD();
 
     this.add.text(W / 2, 88,
-      'Handy: ◀ ▶ seitlich steuern · ▲ = ⚡ NITRO (Bier sammeln zum Aufladen) · ★ = Spezial',
+      'Handy: ◀ ▶ steuern · ★ = NITRO-BOOST (Bier einsammeln zum Aufladen!) · Krokodile = SOFORT RAUS!',
       {
         fontFamily: 'Special Elite, monospace', fontSize: '14px', color: '#fef3d4',
         stroke: '#000', strokeThickness: 3, align: 'center',
@@ -2983,8 +3214,12 @@ class PaddleScene extends Phaser.Scene {
     const charData = charById(data.characterId);
     const p = new PaddlePlayer(this, x, y, id, charData);
     this.physics.add.overlap(p.sprite, this.beers, (sp, beer) => {
+      if (p.eliminated) return;
       beer.destroy();
       p.drinkBeer();
+    });
+    this.physics.add.overlap(p.sprite, this.deadlyZones, () => {
+      if (!p.eliminated && !p.atGoal) p.eliminate();
     });
     this.physics.add.collider(
       p.sprite,
@@ -3035,13 +3270,14 @@ class PaddleScene extends Phaser.Scene {
     });
 
     // Strömung — alle Boote kontinuierlich stromaufwärts (negative vy)
+    const activeForCam = Array.from(this.players.values()).filter(p => !p.eliminated);
     let avgY = 0;
     const justFinished = [];
     for (const p of this.players.values()) {
       const input = playerInputs.get(p.id) || {};
       p.update(input, dt, this.currentSpeed);
-      avgY += p.sprite.y;
-      if (!p.atGoal && p.sprite.y <= this.goalY) {
+      if (!p.eliminated) avgY += p.sprite.y;
+      if (!p.eliminated && !p.atGoal && p.sprite.y <= this.goalY) {
         p.atGoal = true;
         justFinished.push(p);
         const txt = this.add.text(p.sprite.x, p.sprite.y - 50, '🏁 AM ZIEL!', {
@@ -3054,7 +3290,8 @@ class PaddleScene extends Phaser.Scene {
         });
       }
     }
-    avgY /= this.players.size;
+    const nCam = Math.max(1, activeForCam.length);
+    avgY /= nCam;
 
     // Wettkampf: mindestens ein Finisher → Sieg (bei Gleichstand im Frame: wer weiter oben)
     if (!this.gameWon && justFinished.length > 0) {
@@ -3071,7 +3308,7 @@ class PaddleScene extends Phaser.Scene {
     // Wer zu weit zurück (=tiefer) treibt, wird vom Bildrand "geboostet" zurück
     const camBottom = this.cameras.main.scrollY + H;
     for (const p of this.players.values()) {
-      if (p.sprite.y > camBottom - 40) p.sprite.y = camBottom - 60;
+      if (!p.eliminated && p.sprite.y > camBottom - 40) p.sprite.y = camBottom - 60;
     }
   }
 
@@ -3101,12 +3338,18 @@ class PaddleScene extends Phaser.Scene {
     const rankLines = this.finishOrder.map((p, i) =>
       `${i + 1}. ${p.playerName || p.charData.name} (${p.charData.name})`
     );
-    const pending = Array.from(this.players.values()).filter(
-      pl => !this.finishOrder.includes(pl)
+    const dnf = (this.eliminationOrder || []).slice().reverse();
+    const stillRacing = Array.from(this.players.values()).filter(
+      pl => !pl.atGoal && !pl.eliminated
     );
     let bodyText = rankLines.join('\n');
-    if (pending.length) {
-      bodyText += '\n\nNoch unterwegs:\n' + pending.map(pl =>
+    if (dnf.length) {
+      bodyText += '\n\nAusgeschieden (zuletzt zuerst):\n' + dnf.map(pl =>
+        `  · ${pl.playerName || pl.charData.name}`
+      ).join('\n');
+    }
+    if (stillRacing.length) {
+      bodyText += '\n\nNoch im Rennen:\n' + stillRacing.map(pl =>
         `  · ${pl.playerName || pl.charData.name}`
       ).join('\n');
     }
@@ -3143,9 +3386,66 @@ class PaddlePlayer {
     this.charData = charData;
     this.playerName = (playerData.get(id) && playerData.get(id).name) || charData.name;
 
-    // Kajak-Container: Boot + Pixelart-Spieler obendrauf
-    this.boat = scene.add.ellipse(0, 12, 60, 22, 0x6b4a2a);
-    this.boat.setStrokeStyle(2, 0x3d2a1a);
+    // Kajak-Draufsicht: spitzer Bug (stromaufwärts = -Y), Cockpit, Doppelblatt-Paddel quer
+    this.boat = scene.add.container(0, 14, []);
+    const hullGfx = scene.add.graphics();
+    const rim = 0x3d2818;
+    const planking = 0x9a7048;
+    const plankingHi = 0xb8926a;
+    const cockpit = 0x4a3224;
+    const paddleBlade = 0xe2d2bc;
+    const paddleEdge = 0x7a6048;
+    const shaftCol = 0x5c4838;
+
+    hullGfx.fillStyle(planking, 1);
+    hullGfx.lineStyle(2.5, rim, 1);
+    hullGfx.beginPath();
+    hullGfx.moveTo(0, -38);
+    hullGfx.lineTo(16, -24);
+    hullGfx.lineTo(18, 2);
+    hullGfx.lineTo(14, 32);
+    hullGfx.lineTo(0, 40);
+    hullGfx.lineTo(-14, 32);
+    hullGfx.lineTo(-18, 2);
+    hullGfx.lineTo(-16, -24);
+    hullGfx.closePath();
+    hullGfx.fillPath();
+    hullGfx.strokePath();
+
+    hullGfx.lineStyle(1.2, plankingHi, 0.9);
+    hullGfx.beginPath();
+    hullGfx.moveTo(0, -32);
+    hullGfx.lineTo(0, 28);
+    hullGfx.strokePath();
+
+    hullGfx.fillStyle(cockpit, 0.92);
+    hullGfx.lineStyle(1.5, rim, 0.85);
+    hullGfx.beginPath();
+    hullGfx.moveTo(0, -18);
+    hullGfx.lineTo(10, -10);
+    hullGfx.lineTo(11, 8);
+    hullGfx.lineTo(8, 22);
+    hullGfx.lineTo(0, 26);
+    hullGfx.lineTo(-8, 22);
+    hullGfx.lineTo(-11, 8);
+    hullGfx.lineTo(-10, -10);
+    hullGfx.closePath();
+    hullGfx.fillPath();
+    hullGfx.strokePath();
+
+    hullGfx.fillStyle(0x3d2a1c, 0.9);
+    hullGfx.fillRoundedRect(-9, -4, 18, 7, 2);
+
+    const py = 10;
+    this.paddlePhase = Math.random() * Math.PI * 2;
+    this._paddlePy = py;
+    this._paddleShaft = shaftCol;
+    this._paddleBlade = paddleBlade;
+    this._paddleEdge = paddleEdge;
+    this.paddleGfx = scene.add.graphics();
+    this.paddleGfx.setPosition(0, py);
+    this.redrawPaddle(0);
+    this.boat.add([hullGfx, this.paddleGfx]);
 
     let upper;
     const textureKey = 'char-' + charData.id;
@@ -3164,13 +3464,11 @@ class PaddlePlayer {
     this.sprite.body.setCollideWorldBounds(false);
     if (this.sprite.body.refreshBody) this.sprite.body.refreshBody();
 
-    // Stats — paddleBonus (Jan = 2) skaliert Querbeschleunigung und Boost-Stärke
+    // Stats
     this.paddleBonus = charData.stats.paddleBonus || 1;
-    // Nitro-System: Bier sammeln = Nitro aufladen; ▲ verbraucht Nitro für Boost
     this.maxNitro = 100;
-    this.nitro = 0; // startet leer — erst Bier holen
+    this.nitro = 0;
     this.invulnTimer = 0;
-    this.abilityCooldown = 0;
     this.lateralSpeed = Math.round(200 * this.paddleBonus);
     this.boostExtraVy = Math.round(220 * Math.min(this.paddleBonus, 2));
     this.boostTimer = 0;
@@ -3178,9 +3476,9 @@ class PaddlePlayer {
     this.knockVx = 0;
     this.knockVy = 0;
     this.actionLatch = false;
-    this.upLatch = false;
     this.atGoal = false;
     this.frozen = false;
+    this.eliminated = false;
 
     this.label = scene.add.text(x, y - 40, this.playerName, {
       fontFamily: 'Bungee, sans-serif', fontSize: '12px',
@@ -3190,12 +3488,20 @@ class PaddlePlayer {
 
   update(input, dt, currentSpeed) {
     const body = this.sprite.body;
+    if (this.eliminated) {
+      body.setVelocity(0, 0);
+      return;
+    }
     if (this.frozen) {
       body.setVelocity(0, 0);
       return;
     }
 
     const dampKnock = Math.exp(-dt * 9);
+
+    // Boost-Geschwindigkeit (aktiv wenn boostTimer > 0)
+    const boosting = this.boostTimer > 0;
+    if (boosting) this.boostTimer -= dt;
 
     if (this.knockbackTimer > 0) {
       this.knockbackTimer -= dt;
@@ -3206,10 +3512,7 @@ class PaddlePlayer {
       if (input.right) vx += this.lateralSpeed * 0.4;
       body.setVelocityX(vx);
       let vy = -currentSpeed + this.knockVy;
-      if (this.boostTimer > 0) {
-        vy -= this.boostExtraVy;
-        this.boostTimer -= dt;
-      }
+      if (boosting) vy -= this.boostExtraVy;
       body.setVelocityY(vy);
       if (this.knockbackTimer <= 0) {
         this.knockVx = 0;
@@ -3222,39 +3525,18 @@ class PaddlePlayer {
       body.setVelocityX(vx);
 
       let vy = -currentSpeed;
-      if (this.boostTimer > 0) {
-        vy -= this.boostExtraVy;
-        this.boostTimer -= dt;
-      }
+      if (boosting) vy -= this.boostExtraVy;
       body.setVelocityY(vy);
     }
 
-    // ▲-Button = Nitro-Boost (Edge-Trigger, verbraucht Nitro)
-    const nitroCost = 30; // pro Boost-Aktivierung
-    if (input.up && !this.upLatch && this.nitro >= nitroCost) {
-      this.upLatch = true;
-      this.boostTimer = 1.0;
-      this.nitro = Math.max(0, this.nitro - nitroCost);
-      SFX.jump();
-      this.scene.tweens.add({ targets: this.sprite, scaleY: 1.12, yoyo: true, duration: 150 });
-      // visuelles Nitro-Flammen-Text
-      const fx = this.scene.add.text(this.sprite.x, this.sprite.y - 45, '⚡ NITRO!', {
-        fontFamily: 'Bungee, sans-serif', fontSize: '16px', color: '#f4c842',
-        stroke: '#000', strokeThickness: 3
-      }).setOrigin(0.5);
-      this.scene.tweens.add({ targets: fx, y: fx.y - 40, alpha: 0, duration: 600, onComplete: () => fx.destroy() });
-    }
-    if (!input.up) this.upLatch = false;
-
-    // Action = Special
-    if (input.action && !this.actionLatch && this.abilityCooldown <= 0) {
+    // ★ (Action) = Nitro verbrauchen → Boost
+    if (input.action && !this.actionLatch && this.nitro > 0) {
       this.actionLatch = true;
-      this.useAbility();
+      this.useNitro();
     } else if (!input.action) {
       this.actionLatch = false;
     }
 
-    if (this.abilityCooldown > 0) this.abilityCooldown -= dt;
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
 
     this.label.setPosition(this.sprite.x, this.sprite.y - 40);
@@ -3262,9 +3544,63 @@ class PaddlePlayer {
     if (this.hudStaminaFill) {
       this.hudStaminaFill.scaleX = this.nitro / this.maxNitro;
     }
+
+    // Doppelblatt-Paddel: seitliches „Rudern“; schneller bei Nitro (Graphics — kein Container.setOrigin)
+    if (this.paddleGfx) {
+      const boostRow = this.boostTimer > 0;
+      const bonus = 0.88 + 0.12 * (this.paddleBonus || 1);
+      this.paddlePhase += dt * (boostRow ? 11.5 : 4.0) * bonus;
+      const amp = boostRow ? 0.74 : 0.52;
+      this.redrawPaddle(Math.sin(this.paddlePhase) * amp);
+    }
+  }
+
+  redrawPaddle(angle) {
+    const g = this.paddleGfx;
+    if (!g) return;
+    const c = Math.cos(angle);
+    const s = Math.sin(angle);
+    const R = (x, y) => ({ x: x * c - y * s, y: x * s + y * c });
+    const shaft = this._paddleShaft;
+    const blade = this._paddleBlade;
+    const edge = this._paddleEdge;
+
+    g.clear();
+    const p0 = R(-44, 0);
+    const p1 = R(44, 0);
+    g.lineStyle(3.5, shaft, 1);
+    g.beginPath();
+    g.moveTo(p0.x, p0.y);
+    g.lineTo(p1.x, p1.y);
+    g.strokePath();
+
+    g.fillStyle(blade, 1);
+    g.lineStyle(1.2, edge, 1);
+    const L0 = R(-46, 0);
+    const L1 = R(-58, -5);
+    const L2 = R(-58, 5);
+    g.beginPath();
+    g.moveTo(L0.x, L0.y);
+    g.lineTo(L1.x, L1.y);
+    g.lineTo(L2.x, L2.y);
+    g.closePath();
+    g.fillPath();
+    g.strokePath();
+
+    const R0 = R(46, 0);
+    const R1 = R(58, -5);
+    const R2 = R(58, 5);
+    g.beginPath();
+    g.moveTo(R0.x, R0.y);
+    g.lineTo(R1.x, R1.y);
+    g.lineTo(R2.x, R2.y);
+    g.closePath();
+    g.fillPath();
+    g.strokePath();
   }
 
   drinkBeer() {
+    if (this.eliminated) return;
     const mult = this.charData.stats.drinkMultiplier || 1;
     // Bier = Nitro aufladen (35 Punkte; Jan/Ahln mit drinkMultiplier kriegen mehr)
     const gain = Math.round(35 * mult);
@@ -3280,39 +3616,26 @@ class PaddlePlayer {
     });
   }
 
-  useAbility() {
-    SFX.ability();
-    // Im Paddel-Level vereinfacht: Jan hat Angel (Auto-Pull), alle anderen
-    // bekommen einen kurzen Speed-Boost
-    if (this.charData.id === 'jan') {
-      this.scene.beers.children.iterate(beer => {
-        if (!beer || !beer.active) return;
-        const dx = beer.x - this.sprite.x;
-        const dy = beer.y - this.sprite.y;
-        if (dx * dx + dy * dy < 350 * 350) {
-          this.scene.tweens.add({
-            targets: beer, x: this.sprite.x, y: this.sprite.y,
-            duration: 500, ease: 'Quad.in',
-            onUpdate: () => {
-              if (!beer.active) return;
-              if (beer.body && beer.body.updateFromGameObject) beer.body.updateFromGameObject();
-            },
-            onComplete: () => {
-              if (!beer.active) return;
-              if (beer.body && beer.body.updateFromGameObject) beer.body.updateFromGameObject();
-            }
-          });
-        }
-      });
-      this.abilityCooldown = 8;
-    } else {
-      // Special: sofortiger Extra-Boost ohne Nitro-Kosten
-      this.boostTimer = 2.0;
-      this.abilityCooldown = 12;
-    }
+  useNitro() {
+    if (this.eliminated || this.nitro <= 0) return;
+    SFX.jump();
+    // Gesamtes Nitro wird verbraucht → Boost-Dauer proportional zum Tank
+    const pct = this.nitro / this.maxNitro;
+    this.boostTimer = 0.6 + pct * 1.8; // 0.6 s bei fast leer, bis 2.4 s bei voll
+    this.nitro = 0;
+    this.scene.tweens.add({ targets: this.sprite, scaleY: 1.15, yoyo: true, duration: 180 });
+    const fx = this.scene.add.text(this.sprite.x, this.sprite.y - 45, '⚡ NITRO!', {
+      fontFamily: 'Bungee, sans-serif', fontSize: '18px', color: '#f4c842',
+      stroke: '#000', strokeThickness: 3
+    }).setOrigin(0.5);
+    this.scene.tweens.add({
+      targets: fx, y: fx.y - 50, alpha: 0, duration: 800,
+      onComplete: () => fx.destroy()
+    });
   }
 
   hitObstacle(obstacle) {
+    if (this.eliminated) return;
     if (this.invulnTimer > 0) return;
     this.invulnTimer = 0.9;
     SFX.hit();
@@ -3338,6 +3661,26 @@ class PaddlePlayer {
       targets: this.sprite, alpha: 0.3,
       yoyo: true, repeat: 2, duration: 100,
       onComplete: () => { this.sprite.alpha = 1; }
+    });
+  }
+
+  eliminate() {
+    if (this.eliminated) return;
+    this.eliminated = true;
+    this.frozen = true;
+    this.scene.onPlayerEliminated(this);
+    const body = this.sprite.body;
+    if (body) body.setVelocity(0, 0);
+    SFX.gameOver();
+    this.label.setText('💀 RAUS');
+    this.label.setStyle({ fill: '#c94f4f' });
+    this.scene.tweens.add({
+      targets: this.sprite,
+      alpha: 0.35,
+      scale: 0.55,
+      angle: this.sprite.angle + 0.5,
+      duration: 500,
+      ease: 'Quad.in'
     });
   }
 
