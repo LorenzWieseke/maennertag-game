@@ -27,17 +27,27 @@ app.use(express.static(path.join(__dirname, 'public'), {
   etag: false, lastModified: false, maxAge: 0
 }));
 
-// Lokale IP rausfinden, damit Handys im selben WLAN sich verbinden können
+// Lokale IP rausfinden, damit Handys im selben WLAN sich verbinden können.
+// Bevorzugt typische Heim-LAN-Bereiche (192.168.x) vor VPN/Docker (10.x, 172.16–31).
 function getLocalIP() {
   const ifaces = os.networkInterfaces();
+  const candidates = [];
   for (const name of Object.keys(ifaces)) {
     for (const iface of ifaces[name]) {
       if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
+        candidates.push(iface.address);
       }
     }
   }
-  return 'localhost';
+  if (candidates.length === 0) return 'localhost';
+  const score = (addr) => {
+    if (addr.startsWith('192.168.')) return 400;
+    if (/^172\.(1[6-9]|2\d|3[0-1])\./.test(addr)) return 300;
+    if (/^10\./.test(addr)) return 200;
+    return 100;
+  };
+  candidates.sort((a, b) => score(b) - score(a));
+  return candidates[0];
 }
 
 const LOCAL_IP = getLocalIP();
