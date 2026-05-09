@@ -66,6 +66,21 @@ const SFX = {
 };
 
 // ================================================================
+//  HIGHSCORE-PERSISTENZ (HikeScene)
+// ================================================================
+// Bestwerte werden im Browser pro Gerät gespeichert. Schema:
+//   { bestTimeSec, mostKills, mostMushrooms, mostBeers, runs }
+// `bestTimeSec` = kleiner = besser; alle anderen: größer = besser.
+const HIKE_BEST_KEY = 'maennertag_hikeBest_v1';
+function loadHikeBest() {
+  try { return JSON.parse(localStorage.getItem(HIKE_BEST_KEY)) || {}; }
+  catch (e) { return {}; }
+}
+function saveHikeBest(stats) {
+  try { localStorage.setItem(HIKE_BEST_KEY, JSON.stringify(stats)); } catch (e) {}
+}
+
+// ================================================================
 //  NETZWERK / INPUT-BRIDGE
 // ================================================================
 const socket = io();
@@ -1248,8 +1263,9 @@ class HikeScene extends Phaser.Scene {
     // zurücksetzen, sonst blockiert z. B. spawnRollingStone nach Game Over.
     this.gameWon = false;
     this.gameLost = false;
-    // Startzeit fürs Highscore-Panel — Phaser-internes ms-Clock
-    this.levelStartTime = this.time.now;
+    // Startzeit fürs Highscore-Panel — Date.now() ist robust (monoton genug für UI),
+    // im Gegensatz zu this.time.now, das in create() vor dem ersten preUpdate noch 0 ist.
+    this.levelStartTime = Date.now();
     const goalBaseY = this.topYAt(goalX);
 
     // Bühne (Holzdielen quer vor der Hütte)
@@ -2199,6 +2215,7 @@ class HikeScene extends Phaser.Scene {
       this.physics.add.overlap(player.sprite, this.psycheMushrooms, (sp, mush) => {
         if (!mush || !mush.active) return;
         if (player.knockedOut || player.inWater || player.frozen) return;
+        player.mushroomsEaten++;
         mush.destroy();
         this.startPsycheTrip(player);
       });
@@ -2217,6 +2234,7 @@ class HikeScene extends Phaser.Scene {
         const stomp = falling && fromAbove && angleOk && xOverlap;
         if (stomp) {
           en._stompDead = true;
+          player.enemyKills++;
           pb.setVelocityY(-400);
           player.invulnTimer = Math.max(player.invulnTimer || 0, 0.35);
           player.popText('💥 STOMP!', '#fef3d4');
@@ -2918,21 +2936,156 @@ class HikeScene extends Phaser.Scene {
     for (const p of this.players.values()) p.frozen = true;
 
     const W = this.scale.width, H = this.scale.height;
-    const overlay = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.65)
+
+    // --- Run-Stats sammeln ---
+    // ?? statt || (sonst würde levelStartTime===0 durch Date.now() ersetzt → elapsed=0)
+    const nowMs = Date.now();
+    const elapsedMs = nowMs - (this.levelStartTime ?? nowMs);
+    const elapsedSec = Math.max(0, Math.round(elapsedMs / 1000));
+    const fmtTime = (s) => Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+
+    const playersArr = Array.from(this.players.values());
+    let totalKills = 0, totalMushrooms = 0, totalBeers = 0;
+    for (const p of playersArr) {
+      totalKills     += p.enemyKills     || 0;
+      totalMushrooms += p.mushroomsEaten || 0;
+      totalBeers     += p.beersDrunk     || 0;
+    }
+
+    // --- Bestwerte laden + Rekorde ermitteln ---
+    // Eine ehrliche Wanderzeit ist nie 0 — falls aus früherem Buggy-Lauf eine
+    // 0 gespeichert wurde, ignorieren wir sie und nehmen den aktuellen Wert.
+    const prevBest = loadHikeBest();
+    const prevValidTime = (typeof prevBest.bestTimeSec === 'number' && prevBest.bestTimeSec > 0)
+      ? prevBest.bestTimeSec
+      : null;
+    const newBest = {
+      bestTimeSec:   (prevValidTime          == null) ? elapsedSec     : Math.min(prevValidTime,           elapsedSec),
+      mostKills:     (prevBest.mostKills     == null) ? totalKills     : Math.max(prevBest.mostKills,     totalKills),
+      mostMushrooms: (prevBest.mostMushrooms == null) ? totalMushrooms : Math.max(prevBest.mostMushrooms, totalMushrooms),
+      mostBeers:     (prevBest.mostBeers     == null) ? totalBeers     : Math.max(prevBest.mostBeers,     totalBeers),
+      runs:          (prevBest.runs || 0) + 1
+    };
+    const isNewTime      = prevValidTime          == null || elapsedSec     <  prevValidTime;
+    const isNewKills     = prevBest.mostKills     == null || totalKills     >  prevBest.mostKills;
+    const isNewMushrooms = prevBest.mostMushrooms == null || totalMushrooms >  prevBest.mostMushrooms;
+    const isNewBeers     = prevBest.mostBeers     == null || totalBeers     >  prevBest.mostBeers;
+    saveHikeBest(newBest);
+
+    // --- Overlay + Header ---
+    this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.72)
       .setScrollFactor(0).setDepth(2000);
-    const title = this.add.text(W / 2, H * 0.35, '🍺  GESCHAFFT!', {
-      fontFamily: 'Bungee, sans-serif', fontSize: '72px', color: '#f4c842',
+    this.add.text(W / 2, H * 0.10, '🍺  GESCHAFFT!', {
+      fontFamily: 'Bungee, sans-serif', fontSize: '64px', color: '#f4c842',
       stroke: '#3d1a06', strokeThickness: 10
     }).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
-    const sub = this.add.text(W / 2, H * 0.5,
-      'Alle am Ziel — die Crew hat es zusammen geschafft!', {
-      fontFamily: 'Special Elite, monospace', fontSize: '24px',
-      color: '#fef3d4', stroke: '#000', strokeThickness: 4
+    this.add.text(W / 2, H * 0.18, 'Alle am Ziel — die Crew hat es zusammen geschafft!', {
+      fontFamily: 'Special Elite, monospace', fontSize: '18px',
+      color: '#fef3d4', stroke: '#000', strokeThickness: 3
     }).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
-    const back = this.add.text(W / 2, H * 0.7, '↩  ZURÜCK ZUR LEVEL-AUSWAHL', {
+
+    // --- Stats-Panel-Hintergrund ---
+    const panelW = Math.min(720, W - 80);
+    const panelH = 380;
+    const panelY = H * 0.55;
+    this.add.rectangle(W / 2, panelY, panelW, panelH, 0x1a0f08, 0.92)
+      .setStrokeStyle(4, 0xf4c842).setScrollFactor(0).setDepth(2001);
+
+    // --- Zeit (groß, mittig) ---
+    const timeY = panelY - panelH / 2 + 50;
+    this.add.text(W / 2, timeY - 18, '⏱  ZEIT', {
+      fontFamily: 'Bungee, sans-serif', fontSize: '14px', color: '#d99a1f',
+      letterSpacing: 2
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+    this.add.text(W / 2, timeY + 16, fmtTime(elapsedSec), {
+      fontFamily: 'Bungee, sans-serif', fontSize: '44px', color: '#fef3d4',
+      stroke: '#000', strokeThickness: 5
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+
+    if (isNewTime) {
+      const badge = this.add.text(W / 2, timeY + 52, '🏆  NEUER REKORD!', {
+        fontFamily: 'Bungee, sans-serif', fontSize: '16px', color: '#1a0f08',
+        backgroundColor: '#6dbf47', padding: { x: 10, y: 4 }
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+      this.tweens.add({
+        targets: badge, scale: 1.15, yoyo: true, repeat: -1, duration: 600,
+        ease: 'Sine.inOut'
+      });
+    }
+
+    // --- Team-Summen-Reihe (Kills · Pilze · Bier) ---
+    const rowY = panelY - 30;
+    const colW = panelW / 3;
+    const cols = [
+      { label: 'GEGNER', value: totalKills,     icon: '💀', color: '#c94f4f', isNew: isNewKills },
+      { label: 'PILZE',  value: totalMushrooms, icon: '🍄', color: '#d060ff', isNew: isNewMushrooms },
+      { label: 'BIER',   value: totalBeers,     icon: '🍺', color: '#f4c842', isNew: isNewBeers }
+    ];
+    cols.forEach((c, i) => {
+      const cx = (W / 2) - panelW / 2 + colW * (i + 0.5);
+      this.add.text(cx, rowY - 4, c.icon + '  ' + c.value, {
+        fontFamily: 'Bungee, sans-serif', fontSize: '32px', color: c.color,
+        stroke: '#000', strokeThickness: 4
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+      this.add.text(cx, rowY + 28, c.label, {
+        fontFamily: 'Bungee, sans-serif', fontSize: '12px', color: '#d99a1f',
+        letterSpacing: 2
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+      if (c.isNew) {
+        const tag = this.add.text(cx, rowY + 48, '🏆 NEU!', {
+          fontFamily: 'Bungee, sans-serif', fontSize: '11px', color: '#1a0f08',
+          backgroundColor: '#6dbf47', padding: { x: 6, y: 2 }
+        }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+        this.tweens.add({
+          targets: tag, scale: 1.18, yoyo: true, repeat: -1, duration: 550
+        });
+      }
+    });
+
+    // --- Pro-Spieler-Liste ---
+    const listY = panelY + 70;
+    this.add.text(W / 2, listY - 14, 'PRO SPIELER', {
+      fontFamily: 'Bungee, sans-serif', fontSize: '12px', color: '#d99a1f',
+      letterSpacing: 2
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+
+    if (playersArr.length > 0) {
+      const lineH = 18;
+      const maxNameLen = Math.max(...playersArr.map(p =>
+        ((p.playerName || p.charData.name) + ' (' + p.charData.name + ')').length
+      ));
+      playersArr.forEach((p, i) => {
+        const ly = listY + 10 + i * lineH;
+        const colorHex = '#' + p.charData.color.toString(16).padStart(6, '0');
+        const name = (p.playerName || p.charData.name) + ' (' + p.charData.name + ')';
+        const namePadded = name.padEnd(maxNameLen + 2, ' ');
+        const stats = `💀 ${String(p.enemyKills || 0).padStart(2, ' ')}    ` +
+                      `🍄 ${String(p.mushroomsEaten || 0).padStart(2, ' ')}    ` +
+                      `🍺 ${String(p.beersDrunk || 0).padStart(2, ' ')}`;
+        this.add.text(W / 2, ly, namePadded + stats, {
+          fontFamily: 'Special Elite, monospace', fontSize: '15px',
+          color: colorHex, stroke: '#000', strokeThickness: 2
+        }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+      });
+    }
+
+    // --- Bestwerte-Zeile (gedämpft, unten im Panel) ---
+    const bestY = panelY + panelH / 2 - 24;
+    const bestText = `Bestwerte:   ⏱ ${fmtTime(newBest.bestTimeSec)}    ` +
+                     `💀 ${newBest.mostKills}    ` +
+                     `🍄 ${newBest.mostMushrooms}    ` +
+                     `🍺 ${newBest.mostBeers}    ` +
+                     `· Läufe ${newBest.runs}`;
+    this.add.text(W / 2, bestY, bestText, {
+      fontFamily: 'Special Elite, monospace', fontSize: '13px',
+      color: '#9a8a6a', stroke: '#000', strokeThickness: 2
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2002);
+
+    // --- Back-Button ---
+    const back = this.add.text(W / 2, H - 50, '↩  ZURÜCK ZUR LEVEL-AUSWAHL', {
       fontFamily: 'Bungee, sans-serif', fontSize: '22px', color: '#1a0f08',
       backgroundColor: '#f4c842', padding: { x: 24, y: 12 }
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(2001)
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(2002)
       .setInteractive({ useHandCursor: true });
     back.on('pointerdown', () => this.scene.start('LevelSelectScene'));
 
@@ -3324,6 +3477,7 @@ class HikePlayer {
 
     // Selbst trinken
     this.beerInventory--;
+    this.beersDrunk++;
     const mult = this.charData.stats.drinkMultiplier || 1;
     const gain = 25 * mult;
     this.stamina = Math.min(this.maxStamina, this.stamina + gain);
