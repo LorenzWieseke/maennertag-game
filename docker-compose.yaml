@@ -1,4 +1,4 @@
-# Hostinger VPS Docker UI erwartet oft diesen Dateinamen (nicht nur .yml).
+# Hostinger VPS: Traefik (host) + Let's Encrypt — siehe Projekt "traefik" auf dem VPS.
 services:
   maennertag:
     build: .
@@ -7,4 +7,11 @@ services:
       - "3000:3000"
     environment:
       - PORT=3000
-      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      # Öffentliche HTTPS-URL (Punycode = IDN männertag.site)
+      - PUBLIC_BASE_URL=https://xn--mnnertag-0za.site
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.maennertag.rule=Host(`xn--mnnertag-0za.site`) || Host(`www.xn--mnnertag-0za.site`)
+      - traefik.http.routers.maennertag.entrypoints=websecure
+      - traefik.http.routers.maennertag.tls.certresolver=letsencrypt
+      - traefik.http.services.maennertag.loadbalancer.server.port=3000
