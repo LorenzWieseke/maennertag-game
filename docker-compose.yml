@@ -10,7 +10,7 @@ services:
       - PUBLIC_BASE_URL=https://xn--mnnertag-0za.site
     labels:
       - traefik.enable=true
-      - traefik.http.routers.maennertag.rule=Host(`xn--mnnertag-0za.site`) || Host(`www.xn--mnnertag-0za.site`)
+      - traefik.http.routers.maennertag.rule=Host(`xn--mnnertag-0za.site`)
       - traefik.http.routers.maennertag.entrypoints=websecure
       - traefik.http.routers.maennertag.tls.certresolver=letsencrypt
       - traefik.http.services.maennertag.loadbalancer.server.port=3000
