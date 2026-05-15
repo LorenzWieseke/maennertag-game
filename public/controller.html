@@ -19,9 +19,12 @@
 
   <!-- STEP 1: CHARACTER (Name wird automatisch vom Charakter genommen) -->
   <section id="step-character" class="step active">
+    <button id="back-to-controller-btn" type="button" aria-label="Zurück zum Controller" hidden>
+      ← ZURÜCK
+    </button>
     <header class="step-header">
       <h1>🍻<br>MÄNNERTAG</h1>
-      <p>Wähle deinen Charakter</p>
+      <p id="character-step-subtitle">Wähle deinen Charakter</p>
     </header>
     <div id="character-grid"></div>
   </section>
@@ -31,6 +34,9 @@
     <div id="char-banner">
       <span id="banner-name">—</span>
       <span id="banner-ability">—</span>
+      <button id="change-character-btn" type="button" aria-label="Charakter wechseln">
+        CHARAKTER WECHSELN
+      </button>
     </div>
     <div class="controller-layout">
       <div class="left-pad">

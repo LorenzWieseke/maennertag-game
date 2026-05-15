@@ -11,7 +11,7 @@
       stats: { maxStamina: 100, baseSpeed: 220, staminaRegen: 1.0 } },
     { id: 'lorenz', name: 'Lorenz', color: 0xe8a04e, colorHex: '#e8a04e', ability: 'Glücksgriff',      desc: 'Findet öfter Power-Ups in seiner Nähe',
       stats: { maxStamina: 100, baseSpeed: 220, staminaRegen: 1.0, luckRadius: 200 } },
-    { id: 'stefan', name: 'Stefan', color: 0x2c2c2c, colorHex: '#2c2c2c', ability: 'Coolness-Aura',    desc: 'Immun gegen Blendung, Special: +20% Speed-Buff für ganze Gruppe',
+    { id: 'stefan', name: 'Stefan', color: 0x2c2c2c, colorHex: '#2c2c2c', ability: 'Coolness-Aura',    desc: 'Immun gegen Blendung, Special: Riesensprung mit Extra-Höhe',
       stats: { maxStamina: 100, baseSpeed: 220, staminaRegen: 1.0, hasSunglasses: true } },
     { id: 'jan',    name: 'Jan',    color: 0x4a8a8a, colorHex: '#4a8a8a', ability: 'Paddel-König',     desc: '2× Paddel-Speed, Angel-Special zieht Items aus der Ferne',
       stats: { maxStamina: 110, baseSpeed: 215, staminaRegen: 1.2, paddleBonus: 2.0 } },

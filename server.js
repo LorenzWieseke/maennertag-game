@@ -51,7 +51,11 @@ function getLocalIP() {
 }
 
 const LOCAL_IP = getLocalIP();
-const CONTROLLER_URL = `http://${LOCAL_IP}:${PORT}/controller.html`;
+// Öffentliche URL (z. B. https://domain.de) für VPS/Docker — sonst LAN-IP im QR-Code
+const PUBLIC_ORIGIN = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+const DEFAULT_ORIGIN = `http://${LOCAL_IP}:${PORT}`;
+const APP_ORIGIN = PUBLIC_ORIGIN || DEFAULT_ORIGIN;
+const CONTROLLER_URL = `${APP_ORIGIN}/controller.html`;
 
 // QR-Code-Endpoint — der Host (index.html) holt sich den QR von hier
 app.get('/qr', async (req, res) => {
@@ -229,7 +233,7 @@ httpServer.on('error', (err) => {
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log('\n🍻  MÄNNERTAG-GAME-SERVER\n');
-  console.log(`   Spiel-Bildschirm:  http://${LOCAL_IP}:${PORT}/`);
+  console.log(`   Spiel-Bildschirm:  ${APP_ORIGIN}/`);
   console.log(`   Controller-URL:    ${CONTROLLER_URL}`);
   console.log('\n   Öffne das Spiel auf dem großen Display und scanne den QR-Code mit den Handys.\n');
 });

@@ -15,7 +15,7 @@ const CHARACTERS = typeof MAENNERTAG_CHARACTERS !== 'undefined'
       stats: { maxStamina: 100, baseSpeed: 220, staminaRegen: 1.0 } },
     { id: 'lorenz', name: 'Lorenz', color: 0xe8a04e, ability: 'Glücksgriff',      desc: 'Findet öfter Power-Ups in seiner Nähe',
       stats: { maxStamina: 100, baseSpeed: 220, staminaRegen: 1.0, luckRadius: 200 } },
-    { id: 'stefan', name: 'Stefan', color: 0x2c2c2c, ability: 'Coolness-Aura',    desc: 'Immun gegen Blendung, Special: +20% Speed-Buff für ganze Gruppe',
+    { id: 'stefan', name: 'Stefan', color: 0x2c2c2c, ability: 'Coolness-Aura',    desc: 'Immun gegen Blendung, Special: Riesensprung mit Extra-Höhe',
       stats: { maxStamina: 100, baseSpeed: 220, staminaRegen: 1.0, hasSunglasses: true } },
     { id: 'jan',    name: 'Jan',    color: 0x4a8a8a, ability: 'Paddel-König',     desc: '2× Paddel-Speed, Angel-Special zieht Items aus der Ferne',
       stats: { maxStamina: 110, baseSpeed: 215, staminaRegen: 1.2, paddleBonus: 2.0 } },
@@ -164,6 +164,7 @@ document.getElementById('start-btn').addEventListener('click', () => {
 // ================================================================
 let game;
 function startGame() {
+  const enablePhysicsDebug = /(?:[?&])physicsDebug=1(?:&|$)/.test(window.location.search);
   game = new Phaser.Game({
     type: Phaser.AUTO,
     parent: 'game-container',
@@ -172,7 +173,7 @@ function startGame() {
     pixelArt: false,
     physics: {
       default: 'arcade',
-      arcade: { gravity: { y: 1400 }, debug: false }
+      arcade: { gravity: { y: 1400 }, debug: enablePhysicsDebug }
     },
     scale: {
       mode: Phaser.Scale.RESIZE,
@@ -354,6 +355,7 @@ class HikeScene extends Phaser.Scene {
       return Math.min(sectStarts.length - 1,
         Math.max(0, Math.floor((x / LEVEL_WIDTH) * sectStarts.length)));
     };
+    this._biomeAt = (x) => this.biomeOfSection[this._sectionIndexAt(x)] ?? 0;
 
     // Hügel-Parallax: PRO BIOM eigene Farbe + Verteilung
     // Wiese: hellgrün. Wald: dunkelgrün/spitzig. Fels: grau-blau.
@@ -1379,19 +1381,23 @@ class HikeScene extends Phaser.Scene {
     }).setOrigin(0.5).setDepth(50);
 
     // --- Bier-Pickups — entlang des Höhenprofils ---
-    // Pro Plattform: 3 Biere am Boden, plus 18 Sprung-Belohnungen in der Luft.
-    // Mehr Biere als vorher, damit Wiederbelebungs-Würfe immer verfügbar sind.
+    // Anzahl skaliert mit Spielerzahl; Wiese bekommt Extra-Bier (leichter Einstieg).
     this.beers = this.physics.add.staticGroup();
     this.powerups = this.physics.add.staticGroup();
+    const pc = Math.max(1, playerData.size);
+    const beersPerPlat = 2 + pc;
     for (const p of this.terrain) {
       const w = p.end - p.start;
       if (w < 200) continue;
-      for (let i = 1; i <= 3; i++) {
-        const x = p.start + w * (i / 4);
+      for (let i = 1; i <= beersPerPlat; i++) {
+        const x = p.start + w * (i / (beersPerPlat + 1));
         this.spawnBeer(x, p.topY - 50);  // 50 px über der Grasoberfläche
       }
+      if (p.biome === 0) {
+        this.spawnBeer(p.start + w * 0.85, p.topY - 50);
+      }
     }
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 14 + 6 * pc; i++) {
       const plat = this.terrain[Math.floor(Math.random() * this.terrain.length)];
       const w = plat.end - plat.start;
       if (w < 200) continue;
@@ -1843,9 +1849,17 @@ class HikeScene extends Phaser.Scene {
 
     // Mid-Game Joins — Listener bei Scene-Wechsel entfernen (sonst doppelte Spawns)
     this._onHikePlayerJoined = (p) => {
-      if (!this.players.has(p.id)) {
+      const existing = this.players.get(p.id);
+      if (!existing) {
         this.spawnPlayer(p.id, p, this.cameras.main.scrollX + 100);
+        return;
       }
+      // Charakterwechsel mid-game: alten Spieler an gleicher Position
+      // zerstören und durch neue Figur ersetzen. Stats/Sprite/Ability werden
+      // dadurch sauber neu aufgebaut, ohne dass wir applyCharacter() pro
+      // Charakter-Spezialfall pflegen müssen (Schumi-Aura, Sven, ...).
+      if (existing.charData.id === p.characterId) return;
+      this.replacePlayerWithCharacter(p);
     };
     this._onHikePlayerLeft = (id) => {
       const p = this.players.get(id);
@@ -2034,12 +2048,12 @@ class HikeScene extends Phaser.Scene {
     this.breweries.forEach((b, idx) => {
       if (!b.plateau) return;
       const isMeadow = b.plateau.sectionIndex === 0;
-      // Wiese: sanfterer Einstieg (9 s Wartezeit, alle 7–9 s ein Stein, kein Doppelschuss)
-      const firstDelay = (isMeadow ? 9000 : 5500) + idx * 1800 + Math.random() * 1500;
+      // Wiese: sanfterer Einstieg (12 s Wartezeit, alle 9–11,5 s ein Stein, kein Doppelschuss)
+      const firstDelay = (isMeadow ? 12000 : 5500) + idx * 1800 + Math.random() * 1500;
       this.time.delayedCall(firstDelay, () => {
         this.spawnRollingStone(b.plateau);
         this.time.addEvent({
-          delay: (isMeadow ? 7000 : 4200) + Math.random() * 2200,
+          delay: (isMeadow ? 9000 : 4200) + Math.random() * (isMeadow ? 2500 : 2200),
           loop: true,
           callback: () => {
             this.spawnRollingStone(b.plateau);
@@ -2165,6 +2179,28 @@ class HikeScene extends Phaser.Scene {
     beer.body.updateFromGameObject();
     this.beers.add(beer);
     return beer;
+  }
+
+  /** Mid-Game Charakterwechsel: gleichen Spieler an seiner aktuellen
+   *  Position als neue Figur respawnen. Position übernehmen, alle States
+   *  des alten Charakters gehen bewusst verloren — neuer Charakter,
+   *  neue Stats. */
+  replacePlayerWithCharacter(p) {
+    const existing = this.players.get(p.id);
+    if (!existing) return;
+    const ox = existing.sprite.x;
+    const oy = existing.sprite.y;
+    existing.destroy();
+    this.players.delete(p.id);
+    this.spawnPlayer(p.id, p, ox);
+    const fresh = this.players.get(p.id);
+    if (fresh && fresh.sprite) {
+      fresh.sprite.setPosition(ox, oy);
+      if (fresh.sprite.body && fresh.sprite.body.reset) {
+        fresh.sprite.body.reset(ox, oy);
+      }
+      if (fresh.label) fresh.label.setPosition(ox, oy - 70);
+    }
   }
 
   spawnPlayer(id, data, x) {
@@ -3305,11 +3341,10 @@ class HikePlayer {
       this.actionLatch = false;
     }
 
-    // Stamina-Drain beim Bewegen, sehr schwacher Regen wenn still.
-    // Bewusst hart: man MUSS Brauereien und Trinken benutzen, sonst kommt
-    // man nicht durch. Stehenbleiben regeneriert nur ein bisschen.
+    // Stamina-Drain beim Bewegen — biomabhängig (Wiese leicht → Gipfel hart).
+    const drainRate = { 0: 3.5, 1: 5.0, 2: 7.0 }[this.scene._biomeAt(this.sprite.x)] ?? 7;
     if ((left || right) && !this.staminaShield) {
-      this.stamina = Math.max(0, this.stamina - dt * 7);
+      this.stamina = Math.max(0, this.stamina - dt * drainRate);
     } else {
       this.stamina = Math.min(this.maxStamina, this.stamina + this.staminaRegen * dt * 1.5);
     }
@@ -3479,7 +3514,8 @@ class HikePlayer {
     this.beerInventory--;
     this.beersDrunk++;
     const mult = this.charData.stats.drinkMultiplier || 1;
-    const gain = 25 * mult;
+    const baseGain = { 0: 35, 1: 30, 2: 25 }[this.scene._biomeAt(this.sprite.x)] ?? 25;
+    const gain = baseGain * mult;
     this.stamina = Math.min(this.maxStamina, this.stamina + gain);
     this.drunkenness = Math.min(100, this.drunkenness + (this.charData.stats.drunkImmune ? 4 : 18));
     this._isAbilityScaling = true;
@@ -3769,7 +3805,7 @@ class HikePlayer {
     schumi:  { name: 'ZEITLUPE',     desc: 'Welt 60% langsamer (3s)' },
     sven:    { name: 'SPRINT',       desc: '70% schneller (2.5s)'    },
     jan:     { name: 'ANGEL',        desc: 'Saugt Biere im Umkreis an' },
-    stefan:  { name: 'TEAM-BOOST',   desc: 'Alle 20% schneller (4s)' },
+    stefan:  { name: 'RIESENSPRUNG', desc: 'Katapultiert dich hoch in die Luft' },
     manu:    { name: 'ZWEITER WIND', desc: 'Stamina sofort voll'     },
     ahln:    { name: 'MEGA-SCHLUCK', desc: 'Stamina voll, Promille 0' },
     lorenz:  { name: 'GLÜCKSGRIFF',  desc: '5 Biere aus dem Hut'     }
@@ -3845,19 +3881,18 @@ class HikePlayer {
         this.abilityCooldown = 8;
         break;
 
-      case 'stefan': // Group-Speed-Buff — multiplikativ, damit Sven-Sprint o.ä. nicht „eingefroren“ wird
-        this.scene.players.forEach(p => {
-          if (!p._speedBuffActive) {
-            p._speedBuffActive = true;
-            p.currentSpeed *= 1.2;
-            this.scene.time.delayedCall(4000, () => {
-              p.currentSpeed /= 1.2;
-              p._speedBuffActive = false;
-            });
-          }
-        });
-        this.abilityCooldown = 20;
+      case 'stefan': { // Riesensprung — starke Vertikalität mit leichtem Vorwärtsschub
+        const body = this.sprite.body;
+        if (body) {
+          const dir = this.sprite.flipX ? -1 : 1;
+          const launchX = Phaser.Math.Clamp(body.velocity.x + dir * 140, -360, 360);
+          body.setVelocity(launchX, -1120);
+        }
+        this.scene.cameras.main.shake(180, 0.008);
+        SFX.jump && SFX.jump();
+        this.abilityCooldown = 14;
         break;
+      }
 
       case 'manu': // Zweiter Wind — Stamina sofort voll
         this.stamina = this.maxStamina;
@@ -4065,20 +4100,25 @@ class PaddleScene extends Phaser.Scene {
     const g = this.make.graphics({ x: 0, y: 0, add: false });
 
     // Krokodil aus der Draufsicht, zentriert um (0,0) in der 150x50-Textur
+    g.fillStyle(0x173541, 0.18);
+    g.fillEllipse(78, 27, 116, 28);
     g.fillStyle(0x2d5a38, 1);
-    g.fillTriangle(10, 18, 48, 25, 10, 32);   // Schwanz
+    g.fillTriangle(8, 17, 50, 25, 8, 33);     // Schwanz
     g.fillStyle(0x3d7a4a, 1);
-    g.fillEllipse(75, 25, 80, 34);             // Rumpf
+    g.fillEllipse(75, 25, 86, 36);             // Rumpf
     g.fillStyle(0x4a9060, 1);
-    g.fillEllipse(75, 25, 66, 26);             // Bauch heller
+    g.fillEllipse(74, 24, 68, 24);             // Bauch heller
     g.fillStyle(0x2a4a32, 0.75);
-    g.fillEllipse(62, 13, 22, 6);              // Rücken-Streifen
-    g.fillEllipse(78, 12, 24, 6);
+    g.fillEllipse(58, 13, 18, 6);              // Rücken-Streifen
+    g.fillEllipse(76, 12, 22, 6);
     g.fillEllipse(94, 13, 20, 5);
+    g.fillEllipse(109, 16, 15, 5);
     g.fillStyle(0x458a58, 1);
-    g.fillEllipse(114, 22, 34, 26);            // Kopf
+    g.fillEllipse(116, 23, 38, 28);            // Kopf
     g.fillStyle(0x356648, 1);
-    g.fillTriangle(130, 13, 148, 25, 130, 37); // Schnauze
+    g.fillTriangle(131, 13, 149, 25, 131, 37); // Schnauze
+    g.fillStyle(0x244738, 0.95);
+    g.fillTriangle(118, 25, 144, 25, 130, 31); // Kieferkante
     // Zähne
     g.fillStyle(0xf5f0e6, 1);
     for (let z = 0; z < 4; z++) {
@@ -4088,6 +4128,9 @@ class PaddleScene extends Phaser.Scene {
     g.fillEllipse(80, 40, 10, 8);              // Beine
     g.fillEllipse(96, 40, 10, 8);
     g.fillEllipse(110, 40, 9, 7);
+    g.fillStyle(0x2c563b, 0.85);
+    g.fillTriangle(66, 35, 74, 28, 82, 35);
+    g.fillTriangle(84, 35, 92, 28, 100, 35);
     g.fillStyle(0xfff8dc, 1);
     g.fillCircle(118, 12, 4);                  // Augen
     g.fillCircle(118, 37, 4);
@@ -4107,6 +4150,8 @@ class PaddleScene extends Phaser.Scene {
     if (this.textures.exists('paddle-junk-trabi')) return;
 
     const tr = this.make.graphics({ x: 0, y: 0, add: false });
+    tr.fillStyle(0x173541, 0.18);
+    tr.fillEllipse(58, 38, 96, 30);
     tr.fillStyle(0x6a5a4a, 1);
     tr.fillEllipse(60, 34, 102, 44);
     tr.fillStyle(0xc4a882, 1);
@@ -4114,19 +4159,24 @@ class PaddleScene extends Phaser.Scene {
     tr.fillStyle(0x8a7a6a, 1);
     tr.fillRoundedRect(28, 14, 56, 22, 4);
     tr.fillStyle(0xa8c8e8, 0.55);
-    tr.fillRect(36, 18, 18, 10);
+    tr.fillRoundedRect(35, 17, 20, 12, 3);
+    tr.fillStyle(0xd6e3ef, 0.25);
+    tr.fillRoundedRect(58, 18, 16, 10, 3);
     tr.fillStyle(0x5a4a3a, 1);
-    tr.fillEllipse(22, 40, 14, 10);
-    tr.fillEllipse(96, 38, 16, 11);
-    tr.fillStyle(0x8b4513, 0.85);
-    tr.fillCircle(44, 42, 5);
-    tr.fillCircle(72, 44, 4);
+    tr.fillEllipse(24, 40, 16, 10);
+    tr.fillEllipse(96, 38, 18, 11);
+    tr.fillStyle(0x7b6756, 0.85);
+    tr.fillRoundedRect(34, 38, 46, 6, 3);
+    tr.fillStyle(0x6b5848, 0.75);
+    tr.fillRect(52, 18, 2, 24);
     tr.lineStyle(2, 0x3a3028, 0.9);
     tr.strokeEllipse(58, 36, 88, 36);
     tr.generateTexture('paddle-junk-trabi', 120, 64);
     tr.destroy();
 
     const mp = this.make.graphics({ x: 0, y: 0, add: false });
+    mp.fillStyle(0x173541, 0.18);
+    mp.fillEllipse(36, 38, 50, 20);
     mp.fillStyle(0x2a2a2a, 1);
     mp.fillCircle(18, 38, 12);
     mp.fillCircle(54, 38, 12);
@@ -4134,14 +4184,20 @@ class PaddleScene extends Phaser.Scene {
     mp.fillRoundedRect(22, 22, 32, 18, 5);
     mp.fillStyle(0x4a4038, 1);
     mp.fillRoundedRect(26, 14, 22, 14, 3);
+    mp.fillStyle(0xbaa48e, 0.85);
+    mp.fillRoundedRect(27, 23, 22, 9, 3);
     mp.fillStyle(0x3a3530, 1);
     mp.fillRect(34, 8, 4, 12);
+    mp.fillRect(18, 24, 5, 3);
+    mp.fillRect(53, 24, 5, 3);
     mp.lineStyle(1.5, 0x1a1a1a, 0.8);
     mp.strokeRoundedRect(22, 22, 32, 18, 5);
     mp.generateTexture('paddle-junk-moped', 72, 48);
     mp.destroy();
 
     const ct = this.make.graphics({ x: 0, y: 0, add: false });
+    ct.fillStyle(0x173541, 0.18);
+    ct.fillEllipse(50, 40, 76, 24);
     ct.fillStyle(0x8899aa, 1);
     ct.fillRoundedRect(18, 12, 62, 28, 3);
     ct.lineStyle(2, 0x4a5560, 1);
@@ -4157,47 +4213,119 @@ class PaddleScene extends Phaser.Scene {
     ct.fillCircle(70, 46, 9);
     ct.fillStyle(0xd4dce4, 0.35);
     ct.fillRect(22, 18, 52, 6);
+    ct.fillStyle(0x738291, 0.95);
+    ct.fillRect(78, 18, 10, 4);
+    ct.fillRect(78, 31, 10, 4);
     ct.generateTexture('paddle-junk-cart', 96, 56);
     ct.destroy();
   }
 
-  /** Krokodil oder Fluss-Wrack — gleiche tödliche Gruppe + Warnpunkte */
-  spawnPaddleDeadlyHazard(ox, oy, textureKey) {
-    const isCroc = textureKey === 'dead-croc-tex';
-    const prof = isCroc
-      ? { bw: 110, bh: 36, ox: 20, oy: 7, baseAngle: -90, wobble: 8, scale: 0.95, warnDx: 46, warnDy: 25 }
-      : textureKey === 'paddle-junk-trabi'
-        ? { bw: 100, bh: 40, ox: 10, oy: 12, baseAngle: -88, wobble: 14, scale: 0.9, warnDx: 40, warnDy: 22 }
-        : textureKey === 'paddle-junk-moped'
-          ? { bw: 56, bh: 34, ox: 8, oy: 7, baseAngle: -90, wobble: 20, scale: 1, warnDx: 30, warnDy: 18 }
-          : { bw: 80, bh: 38, ox: 8, oy: 9, baseAngle: -92, wobble: 12, scale: 0.88, warnDx: 36, warnDy: 20 };
-
-    const spr = this.deadlyZones.create(ox, oy, textureKey);
-    spr.setOrigin(0.5, 0.5);
-    const flip = Math.random() < 0.5;
-    spr.setFlipX(flip);
-    spr.angle = prof.baseAngle + (isCroc ? 0 : (Math.random() - 0.5) * 26);
-    spr.setScale(prof.scale * (0.96 + Math.random() * 0.08));
-    if (spr.body && spr.body.setSize) {
-      spr.body.setSize(prof.bw, prof.bh);
-      spr.body.setOffset(prof.ox, prof.oy);
+  getPaddleHazardProfile(textureKey) {
+    if (textureKey === 'dead-croc-tex') {
+      return {
+        baseAngle: -90,
+        wobble: 8,
+        scale: 0.96,
+        driftX: 24,
+        hitboxes: [
+          { x: -34, y: 0, r: 9 },
+          { x: -10, y: 0, r: 12 },
+          { x: 18, y: 0, r: 14 },
+          { x: 44, y: 0, r: 11 }
+        ]
+      };
     }
+    if (textureKey === 'paddle-junk-trabi') {
+      return {
+        baseAngle: -88,
+        wobble: 10,
+        scale: 0.9,
+        driftX: 18,
+        hitboxes: [
+          { x: -24, y: 0, r: 12 },
+          { x: 0, y: 0, r: 15 },
+          { x: 25, y: 0, r: 12 }
+        ]
+      };
+    }
+    if (textureKey === 'paddle-junk-moped') {
+      return {
+        baseAngle: -90,
+        wobble: 14,
+        scale: 1,
+        driftX: 18,
+        hitboxes: [
+          { x: -16, y: 0, r: 8 },
+          { x: 2, y: 0, r: 10 },
+          { x: 18, y: 0, r: 8 }
+        ]
+      };
+    }
+    return {
+      baseAngle: -92,
+      wobble: 10,
+      scale: 0.9,
+      driftX: 18,
+      hitboxes: [
+        { x: -18, y: 0, r: 10 },
+        { x: 6, y: 0, r: 12 },
+        { x: 28, y: 0, r: 9 }
+      ]
+    };
+  }
 
-    const wdx = prof.warnDx;
-    const wdy = prof.warnDy;
-    const warnTop = this.add.circle(ox + (flip ? -wdx : wdx), oy - wdy, 4, 0xff5522, 0.62);
-    const warnBot = this.add.circle(ox + (flip ? -wdx : wdx), oy + wdy, 4, 0xff5522, 0.62);
-    spr.setData({ warnTop, warnBot, flip, warnDx: wdx, warnDy: wdy });
-    this.tweens.add({
-      targets: [warnTop, warnBot],
-      alpha: { from: 0.62, to: 0.18 },
-      yoyo: true, repeat: -1, duration: 580
+  createPaddleHazardHitbox(hazard, localDef, scale) {
+    const radius = localDef.r * scale;
+    const debugAlpha = this.paddleHazardDebug ? 0.24 : 0.001;
+    const hitbox = this.add.circle(hazard.x, hazard.y, radius, 0xff3355, debugAlpha);
+    if (!this.paddleHazardDebug) hitbox.setVisible(false);
+    this.physics.add.existing(hitbox);
+    hitbox.body.setAllowGravity(false);
+    hitbox.body.setImmovable(true);
+    if (hitbox.body.setCircle) hitbox.body.setCircle(radius);
+    hitbox._hazardLocalX = localDef.x * scale;
+    hitbox._hazardLocalY = localDef.y * scale;
+    if (hitbox.body.updateFromGameObject) hitbox.body.updateFromGameObject();
+    this.deadlyHitboxes.add(hitbox);
+    return hitbox;
+  }
+
+  syncPaddleHazardHitboxes(hazard) {
+    if (!hazard || !hazard.hazardHitboxes) return;
+    const angle = Phaser.Math.DegToRad(hazard.angle || 0);
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const flip = hazard.flipX ? -1 : 1;
+    hazard.hazardHitboxes.forEach(hitbox => {
+      if (!hitbox || !hitbox.active) return;
+      const localX = (hitbox._hazardLocalX || 0) * flip;
+      const localY = hitbox._hazardLocalY || 0;
+      const worldX = hazard.x + localX * cos - localY * sin;
+      const worldY = hazard.y + localX * sin + localY * cos;
+      hitbox.setPosition(worldX, worldY);
+      if (hitbox.body && hitbox.body.updateFromGameObject) {
+        hitbox.body.updateFromGameObject();
+      }
     });
+  }
+
+  /** Krokodil oder Fluss-Wrack — sichtbares Sprite plus eigene Kill-Hitboxen */
+  spawnPaddleDeadlyHazard(ox, oy, textureKey) {
+    const prof = this.getPaddleHazardProfile(textureKey);
+    const spr = this.add.sprite(ox, oy, textureKey);
+    spr.setOrigin(0.5, 0.5);
+    spr.setFlipX(Math.random() < 0.5);
+    spr.angle = prof.baseAngle + (textureKey === 'dead-croc-tex' ? 0 : (Math.random() - 0.5) * 18);
+    const scale = prof.scale * (0.97 + Math.random() * 0.06);
+    spr.setScale(scale);
+    spr.hazardHitboxes = prof.hitboxes.map(def => this.createPaddleHazardHitbox(spr, def, scale));
+    this.deadlyZones.add(spr);
+    this.syncPaddleHazardHitboxes(spr);
 
     this.tweens.add({
       targets: spr,
       y: oy + (Math.random() < 0.5 ? 16 : -16),
-      x: ox + (Math.random() - 0.5) * (isCroc ? 24 : 18),
+      x: ox + (Math.random() - 0.5) * prof.driftX,
       yoyo: true, repeat: -1,
       duration: 2400 + Math.random() * 1400,
       ease: 'Sine.easeInOut'
@@ -4264,7 +4392,11 @@ class PaddleScene extends Phaser.Scene {
   }
 
   spawnDeadlyZones(W, SHORE_W, RIVER_LENGTH, goalY) {
-    this.deadlyZones = this.physics.add.staticGroup();
+    this.deadlyZones = this.add.group();
+    this.deadlyHitboxes = this.physics.add.group({
+      allowGravity: false,
+      immovable: true
+    });
     const riverInnerL = SHORE_W + 80;
     const riverInnerR = W - SHORE_W - 80;
     // Weniger Krokodile, dafür tödliche Wracks (Trabi / Moped / Einkaufswagen)
@@ -4480,6 +4612,9 @@ class PaddleScene extends Phaser.Scene {
     this.RIVER_LENGTH = RIVER_LENGTH;
     this.scrollY = 0;
     this.currentSpeed = 112; // px/s Strömung (stromaufwärts)
+    this.paddleHazardDebug =
+      this.physics.world.drawDebug ||
+      /(?:[?&])paddleDebug=1(?:&|$)/.test(window.location.search);
 
     const goalY = -RIVER_LENGTH + 200;
     this.goalY = goalY;
@@ -4605,10 +4740,14 @@ class PaddleScene extends Phaser.Scene {
 
     // Mid-Game Joins — Listener bei Scene-Wechsel entfernen
     this._onPaddlePlayerJoined = (p) => {
-      if (!this.players.has(p.id)) {
+      const existing = this.players.get(p.id);
+      if (!existing) {
         const H = this.scale.height;
         this.spawnPaddler(p.id, p, W * 0.5, this.cameras.main.scrollY + H * 0.55);
+        return;
       }
+      if (existing.charData.id === p.characterId) return;
+      this.replacePaddlerWithCharacter(p);
     };
     this._onPaddlePlayerLeft = (id) => {
       const p = this.players.get(id);
@@ -4665,6 +4804,18 @@ class PaddleScene extends Phaser.Scene {
     return beer;
   }
 
+  /** Mid-Game Charakterwechsel im Paddel-Modus: alten Paddler an gleicher
+   *  Position durch neue Figur ersetzen. */
+  replacePaddlerWithCharacter(p) {
+    const existing = this.players.get(p.id);
+    if (!existing) return;
+    const ox = existing.sprite.x;
+    const oy = existing.sprite.y;
+    existing.destroy();
+    this.players.delete(p.id);
+    this.spawnPaddler(p.id, p, ox, oy);
+  }
+
   spawnPaddler(id, data, x, y) {
     const charData = charById(data.characterId);
     const p = new PaddlePlayer(this, x, y, id, charData);
@@ -4673,7 +4824,7 @@ class PaddleScene extends Phaser.Scene {
       beer.destroy();
       p.drinkBeer();
     });
-    this.physics.add.overlap(p.sprite, this.deadlyZones, (_sp, _croc) => {
+    this.physics.add.overlap(p.sprite, this.deadlyHitboxes, (_sp, _hazard) => {
       if (!p.eliminated && !p.atGoal) p.eliminate();
     });
     if (this.whirlpoolHitboxes) {
@@ -4732,23 +4883,9 @@ class PaddleScene extends Phaser.Scene {
       }
     });
 
-    this.deadlyZones.children.iterate(croc => {
-      if (croc && croc.active && croc.body && croc.body.updateFromGameObject) {
-        croc.body.updateFromGameObject();
-      }
-      if (croc && croc.getData) {
-        const wt = croc.getData('warnTop');
-        const wb = croc.getData('warnBot');
-        const flip = !!croc.getData('flip');
-        const wdx = croc.getData('warnDx');
-        const wdy = croc.getData('warnDy');
-        const dxOff = wdx != null ? wdx : 45;
-        const dyOff = wdy != null ? wdy : 25;
-        if (wt && wb) {
-          const dx = flip ? -dxOff : dxOff;
-          wt.setPosition(croc.x + dx, croc.y - dyOff);
-          wb.setPosition(croc.x + dx, croc.y + dyOff);
-        }
+    this.deadlyZones.children.iterate(hazard => {
+      if (hazard && hazard.active) {
+        this.syncPaddleHazardHitboxes(hazard);
       }
     });
 

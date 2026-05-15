@@ -56,6 +56,7 @@ const socket = io({ auth: { clientId: CLIENT_ID } });
 
 let myCharacter = null;
 let takenChars = new Set();
+let isChoosingCharacter = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   buildCharacterGrid();
@@ -90,8 +91,11 @@ socket.on('character-taken', (charId) => {
 socket.on('joined', ({ characterId }) => {
   const c = CHARACTERS.find(c => c.id === characterId);
   if (!c) return;
+  isChoosingCharacter = false;
   myCharacter = c;
   saveCharId(c.id);
+  updateCharacterGrid();
+  refreshCharacterStepUI();
   document.documentElement.style.setProperty('--char-color', c.color);
   $('#banner-name').textContent = c.name.toUpperCase();
   $('#banner-ability').textContent = c.ability;
@@ -125,7 +129,10 @@ function buildCharacterGrid() {
     card.className = 'char-card';
     card.dataset.id = c.id;
     card.style.setProperty('--char-color', c.color);
-    if (takenChars.has(c.id)) card.classList.add('taken');
+    if (takenChars.has(c.id) && (!myCharacter || myCharacter.id !== c.id)) {
+      card.classList.add('taken');
+    }
+    if (myCharacter && myCharacter.id === c.id) card.classList.add('current');
 
     // Pixelart-Avatar (statt CSS-Rechteck)
     let avatarNode;
@@ -160,15 +167,20 @@ function updateCharacterGrid() {
     } else {
       card.classList.remove('taken');
     }
+    card.classList.toggle('current', card.dataset.id === (myCharacter && myCharacter.id));
   });
 }
 
 function pickCharacter(c) {
-  if (takenChars.has(c.id)) {
+  if (takenChars.has(c.id) && (!myCharacter || myCharacter.id !== c.id)) {
     toast('Schon vergeben!');
     return;
   }
-  // Name = Charakter-Name. Server clamped serverseitig auf 12 Zeichen.
+  // Klick auf den eigenen Charakter im Wechselmodus = Abbrechen, kein Re-Join.
+  if (myCharacter && myCharacter.id === c.id) {
+    cancelCharacterSwitch();
+    return;
+  }
   socket.emit('join-game', { name: c.name.toUpperCase(), characterId: c.id });
   if (navigator.vibrate) navigator.vibrate(30);
 }
@@ -179,6 +191,43 @@ const inputState = {
   action: false, drink: false
 };
 let lastSentJSON = '';
+
+function resetInputState() {
+  Object.keys(inputState).forEach((key) => {
+    inputState[key] = false;
+  });
+  document.querySelectorAll('[data-input].pressed').forEach((btn) => {
+    btn.classList.remove('pressed');
+  });
+  sendInput();
+}
+
+function startCharacterSwitch() {
+  isChoosingCharacter = true;
+  resetInputState();
+  updateCharacterGrid();
+  refreshCharacterStepUI();
+  showStep('#step-character');
+}
+
+function cancelCharacterSwitch() {
+  if (!myCharacter) return;
+  isChoosingCharacter = false;
+  refreshCharacterStepUI();
+  showStep('#step-controller');
+}
+
+function refreshCharacterStepUI() {
+  const back = $('#back-to-controller-btn');
+  const subtitle = $('#character-step-subtitle');
+  const switching = !!myCharacter;
+  if (back) back.hidden = !switching;
+  if (subtitle) {
+    subtitle.textContent = switching
+      ? 'Anderen Charakter wählen — oder zurück'
+      : 'Wähle deinen Charakter';
+  }
+}
 
 function sendInput() {
   const json = JSON.stringify(inputState);
@@ -224,9 +273,20 @@ document.querySelectorAll('[data-input]').forEach(btn => {
   });
 });
 
+const changeCharacterBtn = $('#change-character-btn');
+if (changeCharacterBtn) {
+  changeCharacterBtn.addEventListener('click', startCharacterSwitch);
+}
+
+const backToControllerBtn = $('#back-to-controller-btn');
+if (backToControllerBtn) {
+  backToControllerBtn.addEventListener('click', cancelCharacterSwitch);
+}
+
 // Reconnect / neuer Host: gleiche Join-Logik (nach Host-Reload ist players
 // leer, aber unser Socket lebt noch — dann kommt host-ready vom Server).
 function tryRejoinGame() {
+  if (isChoosingCharacter) return;
   const charId = (myCharacter && myCharacter.id) || loadSavedCharId();
   if (!charId) return;
   const c = CHARACTERS.find(x => x.id === charId);

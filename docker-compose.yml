@@ -1,0 +1,10 @@
+services:
+  maennertag:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      # QR-Code + Logs: öffentliche Origin (https://deine-domain.de) — sonst private Container-IP
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
